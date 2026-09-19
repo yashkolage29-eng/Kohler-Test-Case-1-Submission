@@ -4,6 +4,10 @@ Interactive AI bathroom design and planning prototype. AI proposes and reasons;
 deterministic systems validate and optimize. Offline-first (PRD N1/N2): after
 `npm install`, the core loop runs with no network, no API keys, no GPU.
 
+## Architecture
+
+![System architecture: the web app sends input to the deterministic engine (optimizer, solver, placement, geometry rules), loads the validated catalog, requests optional AI proposals through the server's NIM adapter, and renders the plan in 2D and 3D](diagram.png)
+
 ## Local commands
 
 | Command | What it does |
