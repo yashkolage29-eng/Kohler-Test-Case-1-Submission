@@ -27,5 +27,5 @@ deterministic systems validate and optimize. Offline-first (PRD N1/N2): after
 | `packages/web` (`@kolher/web`) | Framework-free browser UI built with Vite; consumes the engine as an in-process workspace module. |
 | `packages/server` (`@kolher/server`) | Thin Node built-in HTTP server (static host + optional AI proxy). Placeholder until T-012. |
 
-Authoritative docs: `docs/PRD.md`, `docs/SYSTEM_ARCHITECTURE.md`, `docs/DECISIONS.md`.
+Authoritative docs: `Design-Prompts/PRD.md`, `Design_Prompts/SYSTEM_ARCHITECTURE.md`, `Design_Prompts/DECISIONS.md`.
 # Kohler-Test-Case-1-Submission
