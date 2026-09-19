@@ -1,0 +1,163 @@
+// T-004 curated demo catalog — vanities (SCHEMA §12: 6–8 SKUs, ₹20k–90k;
+// ≥2 with width ≤ 900 mm).
+// Geometry: floor-back-center, canonical composition cabinet + top + basin (§6.2).
+// finish_options reference the vanity top material: KOHLER vanity cabinet finishes
+// (wood tones) have no §3.2 finish family; the white quartz/stone top maps to
+// white_stone. Approximation flagged for hand-verification (§12).
+import type { SKU } from "../schema.js";
+
+export const VANITIES: SKU[] = [
+  {
+    model_id: "K-99521-TK",
+    name: "Jute 24-inch vanity",
+    category: "Vanities",
+    fixture_class: "vanity",
+    dim: { w: 610, d: 540, h: 870 },
+    finish_options: ["white_stone"],
+    price: 38000,
+    geometry_descriptor: {
+      anchor: "floor-back-center",
+      primitives: [
+        { part: "cabinet", kind: { shape: "box", sizeMm: { w: 610, d: 540, h: 848 } }, offsetMm: { x: 0, y: 0, z: 0 } },
+        { part: "door", kind: { shape: "box", sizeMm: { w: 285, d: 20, h: 680 } }, offsetMm: { x: 20, y: 80, z: 520 } },
+        { part: "door", kind: { shape: "box", sizeMm: { w: 285, d: 20, h: 680 } }, offsetMm: { x: 305, y: 80, z: 520 } },
+        { part: "kickboard", kind: { shape: "box", sizeMm: { w: 590, d: 20, h: 60 } }, offsetMm: { x: 10, y: 0, z: 520 } },
+        { part: "top", kind: { shape: "box", sizeMm: { w: 610, d: 540, h: 22 } }, offsetMm: { x: 0, y: 848, z: 0 }, finishable: true },
+        { part: "basin", kind: { shape: "box", sizeMm: { w: 400, d: 330, h: 150 } }, offsetMm: { x: 105, y: 700, z: 165 }, finishable: true },
+      ],
+    },
+    feature_tags: ["floor_mount", "soft_close"],
+    compatibility: [],
+    substitutionIds: [],
+  },
+  {
+    model_id: "K-99522-TK",
+    name: "Jute 30-inch vanity",
+    category: "Vanities",
+    fixture_class: "vanity",
+    dim: { w: 762, d: 540, h: 870 },
+    finish_options: ["white_stone"],
+    price: 45000,
+    geometry_descriptor: {
+      anchor: "floor-back-center",
+      primitives: [
+        { part: "cabinet", kind: { shape: "box", sizeMm: { w: 762, d: 540, h: 848 } }, offsetMm: { x: 0, y: 0, z: 0 } },
+        { part: "door", kind: { shape: "box", sizeMm: { w: 361, d: 20, h: 680 } }, offsetMm: { x: 20, y: 80, z: 520 } },
+        { part: "door", kind: { shape: "box", sizeMm: { w: 361, d: 20, h: 680 } }, offsetMm: { x: 381, y: 80, z: 520 } },
+        { part: "kickboard", kind: { shape: "box", sizeMm: { w: 742, d: 20, h: 60 } }, offsetMm: { x: 10, y: 0, z: 520 } },
+        { part: "top", kind: { shape: "box", sizeMm: { w: 762, d: 540, h: 22 } }, offsetMm: { x: 0, y: 848, z: 0 }, finishable: true },
+        { part: "basin", kind: { shape: "box", sizeMm: { w: 552, d: 330, h: 150 } }, offsetMm: { x: 105, y: 700, z: 165 }, finishable: true },
+      ],
+    },
+    feature_tags: ["floor_mount", "soft_close"],
+    compatibility: [],
+    substitutionIds: ["K-99521-TK"],
+  },
+  {
+    model_id: "K-99523-TK",
+    name: "Jute 36-inch vanity",
+    category: "Vanities",
+    fixture_class: "vanity",
+    dim: { w: 914, d: 540, h: 870 },
+    finish_options: ["white_stone"],
+    price: 52000,
+    geometry_descriptor: {
+      anchor: "floor-back-center",
+      primitives: [
+        { part: "cabinet", kind: { shape: "box", sizeMm: { w: 914, d: 540, h: 848 } }, offsetMm: { x: 0, y: 0, z: 0 } },
+        { part: "door", kind: { shape: "box", sizeMm: { w: 437, d: 20, h: 680 } }, offsetMm: { x: 20, y: 80, z: 520 } },
+        { part: "door", kind: { shape: "box", sizeMm: { w: 437, d: 20, h: 680 } }, offsetMm: { x: 457, y: 80, z: 520 } },
+        { part: "kickboard", kind: { shape: "box", sizeMm: { w: 894, d: 20, h: 60 } }, offsetMm: { x: 10, y: 0, z: 520 } },
+        { part: "top", kind: { shape: "box", sizeMm: { w: 914, d: 540, h: 22 } }, offsetMm: { x: 0, y: 848, z: 0 }, finishable: true },
+        { part: "basin", kind: { shape: "box", sizeMm: { w: 704, d: 330, h: 150 } }, offsetMm: { x: 105, y: 700, z: 165 }, finishable: true },
+      ],
+    },
+    feature_tags: ["floor_mount", "soft_close"],
+    compatibility: [],
+    substitutionIds: ["K-99522-TK"],
+  },
+  {
+    model_id: "K-99526-TK",
+    name: "Jute 60-inch double vanity",
+    category: "Vanities",
+    fixture_class: "vanity",
+    dim: { w: 1524, d: 540, h: 870 },
+    finish_options: ["white_stone"],
+    price: 88000,
+    geometry_descriptor: {
+      anchor: "floor-back-center",
+      primitives: [
+        { part: "cabinet", kind: { shape: "box", sizeMm: { w: 1524, d: 540, h: 848 } }, offsetMm: { x: 0, y: 0, z: 0 } },
+        { part: "door", kind: { shape: "box", sizeMm: { w: 742, d: 20, h: 680 } }, offsetMm: { x: 20, y: 80, z: 520 } },
+        { part: "door", kind: { shape: "box", sizeMm: { w: 742, d: 20, h: 680 } }, offsetMm: { x: 762, y: 80, z: 520 } },
+        { part: "kickboard", kind: { shape: "box", sizeMm: { w: 1504, d: 20, h: 60 } }, offsetMm: { x: 10, y: 0, z: 520 } },
+        { part: "top", kind: { shape: "box", sizeMm: { w: 1524, d: 540, h: 22 } }, offsetMm: { x: 0, y: 848, z: 0 }, finishable: true },
+        { part: "basin", kind: { shape: "box", sizeMm: { w: 450, d: 330, h: 150 } }, offsetMm: { x: 137, y: 700, z: 165 }, finishable: true },
+        { part: "basin", kind: { shape: "box", sizeMm: { w: 450, d: 330, h: 150 } }, offsetMm: { x: 937, y: 700, z: 165 }, finishable: true },
+      ],
+    },
+    feature_tags: ["floor_mount", "soft_close"],
+    compatibility: [],
+    substitutionIds: ["K-99523-TK"],
+  },
+  {
+    model_id: "K-2604-F69",
+    name: "Tresham 24-inch vanity",
+    category: "Vanities",
+    fixture_class: "vanity",
+    dim: { w: 610, d: 540, h: 880 },
+    finish_options: ["white_stone"],
+    price: 55000,
+    geometry_descriptor: {
+      anchor: "floor-back-center",
+      primitives: [
+        { part: "cabinet", kind: { shape: "box", sizeMm: { w: 610, d: 540, h: 858 } }, offsetMm: { x: 0, y: 0, z: 0 } },
+        { part: "top", kind: { shape: "box", sizeMm: { w: 610, d: 540, h: 22 } }, offsetMm: { x: 0, y: 858, z: 0 }, finishable: true },
+        { part: "basin", kind: { shape: "box", sizeMm: { w: 400, d: 330, h: 150 } }, offsetMm: { x: 105, y: 710, z: 165 }, finishable: true },
+      ],
+    },
+    feature_tags: ["floor_mount", "soft_close"],
+    compatibility: [],
+    substitutionIds: [],
+  },
+  {
+    model_id: "K-2606-F69",
+    name: "Tresham 30-inch vanity",
+    category: "Vanities",
+    fixture_class: "vanity",
+    dim: { w: 762, d: 540, h: 880 },
+    finish_options: ["white_stone"],
+    price: 62000,
+    geometry_descriptor: {
+      anchor: "floor-back-center",
+      primitives: [
+        { part: "cabinet", kind: { shape: "box", sizeMm: { w: 762, d: 540, h: 858 } }, offsetMm: { x: 0, y: 0, z: 0 } },
+        { part: "top", kind: { shape: "box", sizeMm: { w: 762, d: 540, h: 22 } }, offsetMm: { x: 0, y: 858, z: 0 }, finishable: true },
+        { part: "basin", kind: { shape: "box", sizeMm: { w: 552, d: 330, h: 150 } }, offsetMm: { x: 105, y: 710, z: 165 }, finishable: true },
+      ],
+    },
+    feature_tags: ["floor_mount", "soft_close"],
+    compatibility: [],
+    substitutionIds: ["K-2604-F69"],
+  },
+  {
+    model_id: "K-2608-F69",
+    name: "Tresham 36-inch vanity",
+    category: "Vanities",
+    fixture_class: "vanity",
+    dim: { w: 914, d: 540, h: 880 },
+    finish_options: ["white_stone"],
+    price: 68000,
+    geometry_descriptor: {
+      anchor: "floor-back-center",
+      primitives: [
+        { part: "cabinet", kind: { shape: "box", sizeMm: { w: 914, d: 540, h: 858 } }, offsetMm: { x: 0, y: 0, z: 0 } },
+        { part: "top", kind: { shape: "box", sizeMm: { w: 914, d: 540, h: 22 } }, offsetMm: { x: 0, y: 858, z: 0 }, finishable: true },
+        { part: "basin", kind: { shape: "box", sizeMm: { w: 704, d: 330, h: 150 } }, offsetMm: { x: 105, y: 710, z: 165 }, finishable: true },
+      ],
+    },
+    feature_tags: ["floor_mount", "soft_close"],
+    compatibility: [],
+    substitutionIds: ["K-2606-F69"],
+  },
+];

@@ -1,0 +1,29 @@
+{
+  "name": "kolher",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "npm run build --workspaces --if-present",
+    "test": "npm test --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "lint": "eslint .",
+    "dev": "npm run build -w @kolher/engine && npm run dev -w @kolher/web",
+    "start": "npm run build && npm run start -w @kolher/server"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.5",
+    "@playwright/test": "^1.63.0",
+    "eslint": "^9.39.5",
+    "globals": "^17.12.0",
+    "typescript": "^5.5.0",
+    "typescript-eslint": "^8.70.0",
+    "vitest": "^3.0.0"
+  },
+  "engines": {
+    "node": ">=20.19.0",
+    "npm": ">=10.0.0"
+  }
+}
