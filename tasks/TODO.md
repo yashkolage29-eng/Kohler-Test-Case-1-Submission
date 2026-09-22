@@ -46,3 +46,10 @@ the active MVP roadmap in `tasks/TASKS.md` and must not be implemented without r
 - (From T-028, 2026-09-18) Pre-existing lint: `packages/engine/src/solver/bind.ts` `bindingPool` declares unused `families` / `familyByFinishId`.
 - (From T-030, 2026-09-19) The text room-edit path is now unused by the UI: store `ROOM_AI_TEXT`/`roomAiText`, `requestProposal("room-edit")`/`roomPromptContext` in `web/src/proposals.ts`, and the server `room-edit` route. Remove them or keep them for API parity.
 - (From T-031, 2026-09-19) `npx eslint packages/web/src` fails on a pre-existing unused import `selectedPlan` in `packages/web/src/proposals.test.ts:2`. Remove it so lint is green.
+
+- (2026-09-22, found during T-032) `submission/DEMO_REHEARSAL.md` quotes the old typical plan (₹40,200). After ADR-034 the typical brief lands at ₹1,80,000 (4 fixtures incl. shower + vanity). Re-run `node scripts/rehearse.mjs` and refresh the doc before the demo.
+- (2026-09-22) Shower SKUs are heads only (no enclosure/glass), so the "required shower" renders as a small wall head and is easy to miss in the overview camera.
+- Glass shower screen / enclosure: head-only shower SKUs have no reserved shower-zone footprint, so a presentation screen could overlap a fixture. Needs an engine shower zone first (T-043 decision Q6).
+- Freestanding tubs could sit away from the wall as an island in large rooms; today fixtures always hug a wall strip (T-043 Q5).
+- Wall art on the two camera-facing walls is hidden by the overview cutaway; consider preferring the far walls for art.
+

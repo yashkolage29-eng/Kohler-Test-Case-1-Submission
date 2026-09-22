@@ -122,17 +122,33 @@ function withTailPaths(
         FIXTURE_CLASSES.indexOf(a.cls) - FIXTURE_CLASSES.indexOf(b.cls),
     );
     const drop = tasteRequired[0];
+    // T-040: a sink is mandatory, so dropping a pinned vanity or basin frees the other one.
+    const otherSink = drop.cls === "vanity" ? "basin" : drop.cls === "basin" ? "vanity" : undefined;
+    const ranges = { ...input.featureConstraints.classCountRanges, [drop.cls]: { min: 0, max: 0 } };
+    if (otherSink !== undefined) delete ranges[otherSink];
     paths.push({
       kind: "drop-class",
-      tradeoffDelta: `drop-class: ${drop.cls} removed from the taste class set (was min ${drop.range.min})`,
+      tradeoffDelta: otherSink !== undefined
+        ? `drop-class: ${drop.cls} replaced by a ${otherSink === "basin" ? "standalone basin" : "vanity"} (was min ${drop.range.min})`
+        : `drop-class: ${drop.cls} removed from the taste class set (was min ${drop.range.min})`,
       input: {
         ...input,
-        featureConstraints: {
-          ...input.featureConstraints,
-          classCountRanges: {
-            ...input.featureConstraints.classCountRanges,
-            [drop.cls]: { min: 0, max: 0 },
-          },
+        featureConstraints: { ...input.featureConstraints, classCountRanges: ranges },
+      },
+    });
+  }
+
+  // 3b. drop-shower (T-032/T-036): every default archetype requires a shower or tub; when
+  //    none fits the room or budget, enable the reduced fallback templates, labeled.
+  if (input.config.archetypes.some((a) => a.fallback === true)) {
+    paths.push({
+      kind: "drop-class",
+      tradeoffDelta: "drop-class: shower/tub removed — no shower or tub layout fits this room and budget",
+      input: {
+        ...input,
+        config: {
+          ...input.config,
+          archetypes: input.config.archetypes.map((a) => (a.fallback === true ? { ...a, fallback: false } : a)),
         },
       },
     });

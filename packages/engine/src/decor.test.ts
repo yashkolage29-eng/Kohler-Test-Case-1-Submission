@@ -11,6 +11,7 @@ import {
   parseDecorProposal,
   styleDecorProposal,
   placeDecor,
+  decorCaps,
   type DecorProposal,
   type PlacedDecor,
 } from "./decor.js";
@@ -121,7 +122,7 @@ function checkInvariants(g: RenderGeometry, placed: PlacedDecor[]): void {
     if (p.mount === "floor") {
       for (const f of g.fixtures) expect(aabbIntersectsMm(fp, f.aabb), `${p.id} vs ${f.modelId}`).toBe(false);
       for (const z of zones) expect(aabbIntersectsMm(fp, z), `${p.id} in opening zone`).toBe(false);
-      if (p.type !== "rug") for (const c of clear) expect(aabbIntersectsMm(fp, c), `${p.id} in clearance`).toBe(false);
+      if (p.type !== "rug" && p.type !== "bath-mat") for (const c of clear) expect(aabbIntersectsMm(fp, c), `${p.id} in clearance`).toBe(false);
       expect(p.positionMm.y).toBeCloseTo(p.sizeMm.h / 2, 1); // positions are rounded to 0.1 mm
     }
     if (p.mount === "wall") {
@@ -277,10 +278,11 @@ describe("placeDecor", () => {
     expect(placeDecor(FULL, { ...L_GEOM, fixtures: [...L_GEOM.fixtures].reverse() })).toEqual(b);
   });
 
-  it("never emits more than MAX_DECOR_LIGHTS lights", () => {
+  it("never emits more lights than the room allows", () => {
     const items = Array.from({ length: 6 }, () => ({ type: "pendant" as const, anchor: "ceiling-center" as const, size: "s" as const }));
     const placed = placeDecor({ ...FULL, items }, RECT_GEOM);
-    expect(placed.length).toBe(MAX_DECOR_LIGHTS);
+    expect(placed.length).toBe(decorCaps(RECT_GEOM).lights);
+    expect(decorCaps(RECT_GEOM).lights).toBe(3);
   });
 });
 
@@ -346,6 +348,8 @@ describe("style presets", () => {
     expect(detectStylePreset("nordic hygge")).toBe("scandinavian");
     expect(detectStylePreset("industrial loft, exposed brick")).toBe("industrial-loft");
     expect(detectStylePreset("beach house")).toBe("coastal");
+    expect(detectStylePreset("a dark palette of charcoal black and deep graphite")).toBe("dark-luxury");
+    expect(detectStylePreset("moody noir bathroom")).toBe("dark-luxury");
     expect(detectStylePreset("just a bathroom")).toBeUndefined();
     expect(offlineDecorProposal("black industrial loft").style.preset).toBe("industrial-loft");
     expect(offlineDecorProposal("").style.preset).toBeUndefined();
@@ -355,5 +359,71 @@ describe("style presets", () => {
     const p = styleDecorProposal("japandi");
     expect(parseDecorProposal({ ...p, style: { ...p.style, preset: "baroque" } })).toBeNull();
     expect(parseDecorProposal({ ...p, style: { ...p.style, floor: "oak" } })).toBeNull();
+  });
+});
+
+describe("room-scaled décor (T-043)", () => {
+  const BIG = [v(0, 0), v(4000, 0), v(4000, 3000), v(0, 3000)];
+  const BIG_GEOM = geom(
+    BIG,
+    [
+      fixture(BIG, "shower", "wall-left", 0, 900, 900),
+      fixture(BIG, "toilet", "wall-top", 1400, 400, 700),
+      fixture(BIG, "basin", "wall-top", 2200, 600, 450),
+      fixture(BIG, "tub", "wall-right", 0, 1700, 800),
+    ],
+    [{ id: "door-1", wallId: "wall-bottom", kind: "door", alongOffsetMm: 300, spanMm: 800, swing: { side: "in", leafDimsMm: { w: 800, d: 25 } } }],
+  );
+
+  it("small rooms get no extra pieces; a 12 m² room gets extra pieces and a fourth light", () => {
+    expect(decorCaps(RECT_GEOM)).toEqual({ extraItems: 0, lights: 3 });
+    expect(decorCaps(BIG_GEOM)).toEqual({ extraItems: 7, lights: 4 });
+  });
+
+  it.each(STYLE_PRESETS)("preset %s fills a 12 m² room with more pieces, including art and a light, without collisions", (preset) => {
+    const small = placeDecor(styleDecorProposal(preset), RECT_GEOM);
+    const big = placeDecor(styleDecorProposal(preset), BIG_GEOM);
+    expect(big.length).toBeGreaterThanOrEqual(small.length + 7);
+    expect(big.filter((p) => p.type === "art").length).toBeGreaterThanOrEqual(1);
+    expect(big.filter((p) => p.light).length).toBeGreaterThanOrEqual(2);
+    checkInvariants(BIG_GEOM, big);
+    expect(placeDecor(styleDecorProposal(preset), BIG_GEOM)).toEqual(big);
+  });
+
+  it("offline décor fills a big room too", () => {
+    const big = placeDecor(offlineDecorProposal("calm spa"), BIG_GEOM);
+    expect(big.length).toBeGreaterThanOrEqual(placeDecor(offlineDecorProposal("calm spa"), RECT_GEOM).length + 4);
+    checkInvariants(BIG_GEOM, big);
+  });
+
+  it("a tub tray rests on the tub and a bath mat lies in front of it", () => {
+    const tub = BIG_GEOM.fixtures.find((f) => f.fixtureClass === "tub")!;
+    const placed = placeDecor({ style: FULL.style, items: [{ type: "tub-tray", anchor: "beside-tub", size: "m" }, { type: "bath-mat", anchor: "beside-tub", size: "m" }] }, BIG_GEOM);
+    const tray = placed.find((p) => p.type === "tub-tray")!;
+    const mat = placed.find((p) => p.type === "bath-mat")!;
+    expect(tray.mount).toBe("surface");
+    expect(tray.positionMm.y - tray.sizeMm.h / 2).toBe(600);
+    expect(aabbIntersectsMm(footprint(tray), tub.aabb)).toBe(true);
+    expect(mat.mount).toBe("floor");
+    expect(footprint(mat).max.x).toBeLessThanOrEqual(tub.aabb.min.x);
+    expect(aabbIntersectsMm(footprint(mat), { min: { x: tub.aabb.min.x - 700, y: tub.aabb.min.y }, max: { x: tub.aabb.min.x, y: tub.aabb.max.y } })).toBe(true);
+  });
+
+  it("tall furniture stands against a wall, facing into the room", () => {
+    const placed = placeDecor({ style: FULL.style, items: [{ type: "cabinet", anchor: "free-wall", size: "m" }, { type: "floor-mirror", anchor: "free-wall", size: "m" }, { type: "towel-ladder", anchor: "free-wall", size: "m" }] }, BIG_GEOM);
+    const tall = placed.filter((p) => ["cabinet", "floor-mirror", "towel-ladder"].includes(p.type) && p.id.startsWith("decor-") && Number(p.id.split("-")[1]) < 3);
+    expect(tall).toHaveLength(3);
+    for (const p of tall) {
+      const fp = footprint(p);
+      const gap = Math.min(fp.min.x, fp.min.y, 4000 - fp.max.x, 3000 - fp.max.y);
+      expect(gap, p.id).toBeLessThanOrEqual(T / 2 + 60);
+    }
+    checkInvariants(BIG_GEOM, placed);
+  });
+
+  it("parses the new types", () => {
+    const parsed = parseDecorProposal({ style: FULL.style, items: [{ type: "floor-lamp", anchor: "corner", size: "m" }, { type: "led-strip", anchor: "above-vanity", size: "m" }, { type: "sculpture", anchor: "corner", size: "m" }, { type: "laundry-basket", anchor: "door-side", size: "m" }, { type: "niche-shelf", anchor: "free-wall", size: "m" }, { type: "side-table", anchor: "beside-tub", size: "m" }] });
+    expect(parsed?.items).toHaveLength(6);
+    expect(LIGHT_DECOR_TYPES).toEqual(expect.arrayContaining(["floor-lamp", "led-strip"]));
   });
 });

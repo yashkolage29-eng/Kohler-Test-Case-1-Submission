@@ -16,6 +16,7 @@ import type { FixtureClass } from "../contracts/vocab.js";
 import type { SKU } from "../catalog/schema.js";
 import { resolvePlacement, blockersAhead, clearDistanceMm } from "../geometry/rules/common.js";
 import { clearanceCorridors, clearanceSpecFor } from "../geometry/rules/c2_clearance.js";
+import { roughInForwardOk } from "../geometry/rules/c5_plumbing.js";
 import { aabbInsidePolygonMm, aabbIntersectsMm } from "../geometry/aabb.js";
 import { roundMm } from "../geometry/num.js";
 
@@ -146,6 +147,7 @@ export function solvePlacements(
   rep: BathroomRep,
   input: InputSet,
   budget: { nodes: number },
+  maxResults: number = MAX_PLACEMENTS_PER_SET,
 ): PlacementSearch {
   const fixtures = orderFixtures(skus);
   const walls = orderWalls(rep.strips);
@@ -156,7 +158,7 @@ export function solvePlacements(
   let exhausted = false;
 
   const dfs = (i: number, acc: FixtureBinding[], aabbs: AABB[]) => {
-    if (exhausted || results.length >= MAX_PLACEMENTS_PER_SET) return;
+    if (exhausted || results.length >= maxResults) return;
     if (budget.nodes <= 0) {
       exhausted = true;
       return;
@@ -167,10 +169,11 @@ export function solvePlacements(
     }
     const fixture = fixtures[i];
     if (fixture.class === "faucet") {
-      // Deck faucets mount on a basin (T-028), never on a wall slot of their own: the
-      // k-th faucet is centred at the back of the k-th placed basin (basins precede
-      // faucets in ANCHOR_ORDER). C1 accepts it as deck-mounted when fully inside.
-      const host = acc.filter((b) => b.fixture.class === "basin")[acc.filter((b) => b.fixture.class === "faucet").length];
+      // Deck faucets mount on a sink (T-028), never on a wall slot of their own: the
+      // k-th faucet is centred at the back of the k-th placed basin or vanity (T-032;
+      // both precede faucets in ANCHOR_ORDER). C1 accepts it as deck-mounted when inside.
+      const hosts = acc.filter((b) => b.fixture.class === "basin" || b.fixture.class === "vanity");
+      const host = hosts[acc.filter((b) => b.fixture.class === "faucet").length];
       if (host === undefined) {
         blockers.push(`fc-no-faucet-host:${fixture.skuId}`);
         return;
@@ -193,7 +196,7 @@ export function solvePlacements(
     }
     const alongWall = fixture.footprintMm.w; // orientation 0
     for (const strip of walls) {
-      if (results.length >= MAX_PLACEMENTS_PER_SET) return;
+      if (results.length >= maxResults) return;
       const maxPos = strip.usableLengthMm - alongWall;
       if (maxPos < 0) continue;
       const maxSlot = Math.floor(maxPos / grid);
@@ -209,7 +212,7 @@ export function solvePlacements(
         slotOrders.set(orderKey, slotOrder);
       }
       for (const slot of slotOrder) {
-        if (results.length >= MAX_PLACEMENTS_PER_SET) return;
+        if (results.length >= maxResults) return;
         if (budget.nodes <= 0) {
           exhausted = true;
           return;
@@ -239,6 +242,12 @@ export function solvePlacements(
         // C2 approximation (front + side corridors, fail fast).
         if (!clearanceApprox(binding, fixture, aabbs, rep, input)) {
           blockers.push(`fc-front-clearance-short:${fixture.skuId}`);
+          continue;
+        }
+        // C5 forward check (T-037): rough-in clear of openings and other rough-ins.
+        const placed = acc.flatMap((b) => { const r = resolvePlacement(b, rep); return r.ok ? [r.placement] : []; });
+        if (!roughInForwardOk(resolved.placement, placed, rep, input.config)) {
+          blockers.push(`fc-rough-in-opening:${fixture.skuId}`);
           continue;
         }
         acc.push(binding);

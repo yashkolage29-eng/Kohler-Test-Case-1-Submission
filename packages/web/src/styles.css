@@ -126,7 +126,7 @@ legend { width: 100%; margin-bottom: 12px; color: var(--accent-deep); font-size:
 .room-preview-svg text { fill: var(--muted); font-family: inherit; font-size: 54px; text-anchor: middle; }
 .room-preview-svg .vertical-label { text-anchor: middle; transform: rotate(-90deg); transform-origin: center; }
 .room-preview-svg .preview-door { stroke: #b45b38; stroke-width: 34; stroke-linecap: round; }
-.room-preview-svg .preview-window { stroke: #4f6b7a; stroke-width: 34; }
+.room-preview-svg .preview-window { stroke: #2a8fd6; stroke-width: 7px; vector-effect: non-scaling-stroke; stroke-linecap: butt; }
 .room-preview-svg .preview-wall { stroke: var(--accent); stroke-width: 22; }
 .room-preview-svg .preview-hit { stroke: transparent; stroke-width: 28px; vector-effect: non-scaling-stroke; pointer-events: stroke; }
 .preview-element, .room-preview-svg polygon[data-action] { cursor: pointer; }
@@ -155,7 +155,7 @@ legend { width: 100%; margin-bottom: 12px; color: var(--accent-deep); font-size:
 .room-editor .button-row button { flex: 1 1 auto; min-height: 44px; }
 .room-editor input, .room-editor select { font-size: 1rem; }
 .room-editor .text-button { justify-self: start; min-height: 44px; text-align: left; }
-.legend-window { display: inline-block; width: 18px; height: 3px; background: #4f6b7a; }
+.legend-window { display: inline-block; width: 18px; height: 4px; background: #2a8fd6; }
 .preview-legend { display: flex; flex-wrap: wrap; gap: 18px; padding: 14px 23px; color: var(--muted); font-size: .7rem; }
 .preview-legend span { display: inline-flex; align-items: center; gap: 6px; }
 .legend-line, .legend-door { display: inline-block; width: 18px; height: 2px; background: var(--accent); }
@@ -382,3 +382,23 @@ textarea::placeholder, input::placeholder { color: var(--placeholder); }
   .taste-screen .style-card small { display: none; }
   .taste-solve { padding: 18px; }
 }
+/* T-036 wanted-fixtures list (Taste page + Result adjust panel). */
+.fixture-list { display: grid; gap: 12px; }
+.fixture-wants { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; }
+.fixture-want { display: inline-flex; align-items: center; gap: 8px; min-height: 44px; padding: 0 14px; border: 1px solid var(--line-strong); border-radius: 2px; background: var(--surface); color: var(--ink); font-size: .85rem; cursor: pointer; }
+.fixture-want input { width: 18px; height: 18px; margin: 0; accent-color: var(--accent); }
+.fixture-want:has(input:checked) { border-color: var(--accent); background: var(--accent-soft); }
+.fixture-want:has(input:disabled) { cursor: default; }
+.fixture-lock { margin-left: -4px; color: var(--muted); font-size: .7rem; letter-spacing: .04em; text-transform: uppercase; }
+.adjust-grid .fixture-list { grid-column: 1 / -1; }
+
+/* T-041 priority tabs */
+.priority-tabs { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin: 0 0 18px; }
+.priority-tab { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; min-width: 0; padding: 12px 14px; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); color: var(--muted); text-align: left; cursor: pointer; transition: border-color .2s var(--ease), background .2s var(--ease); }
+.priority-tab:hover { border-color: var(--accent); color: var(--ink); }
+.priority-tab.selected { border-color: var(--accent-deep); background: var(--surface-2); color: var(--ink); box-shadow: inset 0 -3px 0 var(--accent-deep); }
+.priority-tab span { font-size: .75rem; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
+.priority-tab strong { color: var(--accent-deep); font-family: var(--serif); font-size: 1.25rem; }
+.priority-tab small { font-size: .75rem; }
+.priority-tab em { font-size: .72rem; font-style: normal; opacity: .8; }
+@media (max-width: 640px) { .priority-tabs { grid-template-columns: repeat(2, minmax(0, 1fr)); } }

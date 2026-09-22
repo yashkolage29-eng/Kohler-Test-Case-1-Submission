@@ -88,10 +88,11 @@ describe("impossible-brief relaxation (ADR-020 mode 2)", () => {
     const raise = menu.find((entry) => entry.kind === "raise-budget");
     expect(raise).toBeDefined();
     if (raise === undefined) return;
-    // The raise target is the measured minimum viable cost, and the plan lives within it.
-    const target = minViableCost(TYPICAL.config, catalog);
+    // The raise target is the measured cheapest buildable cost (T-032: never below the
+    // per-class estimate), and the plan lives within it.
+    const target = raise.plan.budgetSummary.bMax;
+    expect(target).toBeGreaterThanOrEqual(minViableCost(TYPICAL.config, catalog));
     expect(raise.plan.cost).toBeLessThanOrEqual(target);
-    expect(raise.plan.budgetSummary.bMax).toBe(target);
     expect(raise.tradeoffDelta).toContain(String(target));
   });
 
@@ -180,7 +181,11 @@ it("clearance-blocked brief → shrink-clearance to the legal floor (no over-rel
   });
 
   it("exhaustion → honest out-of-scope naming the traced blocker and measured minimum cost", () => {
-    const catalog = syntheticBathroomCatalog();
+    // T-032: every default archetype needs a shower, so the synthetic set carries one.
+    const catalog = syntheticCatalog([
+      ...syntheticBathroomCatalog().skus,
+      syntheticSku("TEST-SHOWER", "shower", { w: 250, d: 300, h: 300 }),
+    ]);
     // 900×900: even the legal-floor clearances cannot fit the minimum fixture set,
     // and no taste lever applies — the relaxed space is empty.
     const input = makeInput({
@@ -245,8 +250,9 @@ describe("fail-cause tracing (OPT §10.2.1)", () => {
     expect(c2?.category).toBe("clearance");
     const c1 = diagnosis.causes.find((cause) => cause.ruleId === "C1");
     expect(c1?.category).toBe("fit");
+    // T-032: measured cheapest buildable cost, never below the per-class estimate.
     const deficit = minViableCost(input.config, catalog) - 10000;
-    expect(diagnosis.minGaps.budgetDeficitInr).toBe(deficit);
+    expect(diagnosis.minGaps.budgetDeficitInr).toBeGreaterThanOrEqual(deficit);
     expect(diagnosis.minGaps.clearanceShrinkHeadroomMm?.toiletFrontMm).toBe(70); // 600 − 530
     // Deterministic ordering: blockers sorted within the trace.
     const blockers = diagnosis.causes.map((cause) => cause.blocker);

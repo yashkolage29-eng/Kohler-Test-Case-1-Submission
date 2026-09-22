@@ -45,6 +45,30 @@ export function roughInPointMm(p: Placement): Vec2 {
   return { x: roundMm((aabb.min.x + aabb.max.x) / 2), y: backY };
 }
 
+/** Solver forward check (T-037) for C5 (a)+(b): does placing `p` keep its rough-in clear
+ *  of the openings on its strip and of already-placed rough-ins on the same strip? Same
+ *  measurements as evaluateC5, so the search stops proposing layouts that full
+ *  validation would reject (e.g. a toilet centred under a mid-wall window). */
+export function roughInForwardOk(p: Placement, placed: Placement[], rep: BathroomRep, config: Config): boolean {
+  if (!ROUGH_IN_CLASSES.has(p.binding.fixture.class)) return true;
+  const minSep = config.rules.C5.values.minRoughInSeparationMm;
+  if (typeof minSep !== "number") return true;
+  const point = roughInPointMm(p);
+  const origin = p.strip.origin;
+  const coord = p.strip.direction.x !== 0 ? point.x - origin.x : point.y - origin.y;
+  for (const opening of rep.openings) {
+    if (opening.wallId !== p.strip.id) continue;
+    const dist = Math.max(opening.alongOffsetMm - coord, coord - (opening.alongOffsetMm + opening.spanMm), 0);
+    if (dist + EPSILON_MM < minSep) return false;
+  }
+  for (const other of placed) {
+    if (other.strip.id !== p.strip.id || !ROUGH_IN_CLASSES.has(other.binding.fixture.class)) continue;
+    const q = roughInPointMm(other);
+    if (Math.hypot(point.x - q.x, point.y - q.y) + EPSILON_MM < minSep) return false;
+  }
+  return true;
+}
+
 export function evaluateC5(
   candidateBindings: FixtureBinding[],
   rep: BathroomRep,

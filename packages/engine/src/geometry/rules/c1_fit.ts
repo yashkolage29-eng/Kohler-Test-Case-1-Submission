@@ -21,10 +21,12 @@ import {
   sortBindings,
 } from "./common.js";
 
-/** A faucet whose footprint lies fully inside a basin on the same wall is mounted on
- *  that basin's deck (T-028) — one installed unit, not two overlapping fixtures. */
+/** A faucet whose footprint lies fully inside a basin (or a vanity's integrated basin,
+ *  T-032) on the same wall is mounted on that deck (T-028) — one installed unit, not
+ *  two overlapping fixtures. */
 function deckMounted(faucet: Placement, basin: Placement): boolean {
-  if (faucet.binding.fixture.class !== "faucet" || basin.binding.fixture.class !== "basin") return false;
+  const host = basin.binding.fixture.class;
+  if (faucet.binding.fixture.class !== "faucet" || (host !== "basin" && host !== "vanity")) return false;
   if (faucet.strip.id !== basin.strip.id) return false;
   const f = faucet.aabb;
   const h = basin.aabb;

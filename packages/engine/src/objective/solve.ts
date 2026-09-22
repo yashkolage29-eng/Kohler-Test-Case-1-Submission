@@ -14,7 +14,9 @@ import type { FixtureClass } from "../contracts/vocab.js";
 import type { Candidate } from "../contracts/candidate.js";
 import type { Scores } from "../contracts/candidate.js";
 import { buildBathroomRep } from "../geometry/room.js";
+import { polygonSignedAreaMm2 } from "../geometry/polygon.js";
 import { runConstructiveSolver } from "../solver/solve.js";
+import { ONE_OF_GROUPS, missingOneOf } from "../solver/archetypes.js";
 import { resolveFinishes, type ResolvedFinishes } from "./finish.js";
 import { resolveWeights, scoreCandidate } from "./scores.js";
 import { rankCandidates, scoreWithWeights, topK } from "./rank.js";
@@ -75,15 +77,24 @@ export function minViableCost(config: Config, catalog: CatalogState): number {
   }
   let min = Number.POSITIVE_INFINITY;
   for (const archetype of config.archetypes) {
+    if (archetype.fallback === true) continue; // T-032: reached only via drop-shower
     let cost = 0;
     let complete = true;
     for (const [cls, range] of Object.entries(archetype.classCountRanges)) {
+      if (range.min === 0) continue; // optional class — neither costed nor required
       const price = cheapest.get(cls as FixtureClass);
       if (price === undefined) {
         complete = false; // class with no catalog SKUs — archetype not costable
         break;
       }
       cost += price * range.min;
+    }
+    // T-032/T-036: one sink and one shower-or-tub are mandatory even when optional per class.
+    for (const group of ONE_OF_GROUPS) {
+      if (missingOneOf(archetype.classCountRanges, group) === 0) continue;
+      const price = Math.min(...group.map((cls) => cheapest.get(cls) ?? Infinity));
+      if (Number.isFinite(price)) cost += price;
+      else complete = false; // no SKU of the group at all — archetype not costable
     }
     if (complete && cost < min) min = cost;
   }
@@ -94,6 +105,36 @@ export function minViableCost(config: Config, catalog: CatalogState): number {
  *  resolution BEFORE scoring — the T-009 gap: u_cost/C8 must see the true
  *  priceByFinish-resolved cost; over-ceiling candidates drop here). */
 export function validatedCandidates(input: InputSet, catalog: CatalogState): ValidatedCandidates {
+  // T-032: the sink defaults to a vanity (cabinet + top + integrated basin) so the basin
+  // never floats. A standalone basin is used when a style prefers a basin form, when the
+  // taste pins the basin/vanity count, or when no vanity plan fits the room/budget.
+  const fc = input.featureConstraints;
+  const sinkPinned = fc.classCountRanges.basin !== undefined || fc.classCountRanges.vanity !== undefined;
+  if (!sinkPinned && Math.abs(polygonSignedAreaMm2(input.polygon.vertices)) >= DOUBLE_SINK_MIN_AREA_MM2) {
+    // T-043: a big room first tries two standalone basins (each with its own faucet).
+    const double = withPreferenceFallback(
+      { ...input, featureConstraints: { ...fc, classCountRanges: { ...fc.classCountRanges, basin: { min: 2, max: 2 }, vanity: { min: 0, max: 0 } } } },
+      catalog,
+    );
+    if (double.kind !== "infeasible") return double;
+  }
+  if (!sinkPinned) {
+    const sink = fc.preferredTypes?.basin === undefined
+      ? { basin: { min: 0, max: 0 }, vanity: { min: 1, max: 1 } }
+      : { vanity: { min: 0, max: 0 } };
+    const sinkFirst = withPreferenceFallback(
+      { ...input, featureConstraints: { ...fc, classCountRanges: { ...fc.classCountRanges, ...sink } } },
+      catalog,
+    );
+    if (sinkFirst.kind !== "infeasible") return sinkFirst;
+  }
+  return withPreferenceFallback(input, catalog);
+}
+
+/** T-043: floor area (9 m²) from which an Auto sink becomes two basins when they fit and are affordable. */
+const DOUBLE_SINK_MIN_AREA_MM2 = 9_000_000;
+
+function withPreferenceFallback(input: InputSet, catalog: CatalogState): ValidatedCandidates {
   let result = collectValidated(input, catalog);
   // Preferred product types are a preference, not a constraint (T-028): while infeasible,
   // drop them one class at a time, the most space-hungry first.

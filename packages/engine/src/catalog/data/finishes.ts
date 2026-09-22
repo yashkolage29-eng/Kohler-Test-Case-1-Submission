@@ -9,4 +9,7 @@ export const FINISHES: Finish[] = [
   { id: "brushed_gold", label: "Brushed Gold", family: "brushed_gold", luxuryPoints: 3, wearResistance: 3, swatchHex: "#C8A96A" },
   { id: "vibrant_brushed_moderne_brass", label: "Vibrant Brushed Moderne Brass", family: "brushed_gold", luxuryPoints: 3, wearResistance: 3, swatchHex: "#BDA477" },
   { id: "white_stone", label: "White Stone", family: "stone", luxuryPoints: 3, wearResistance: 4, swatchHex: "#E8E6E1" },
+  // T-042: exact KOHLER India colour names for the premium additions.
+  { id: "vibrant_french_gold", label: "Vibrant French Gold", family: "brushed_gold", luxuryPoints: 3, wearResistance: 3, swatchHex: "#C9A25A" },
+  { id: "black_ceramic", label: "Black (ceramic)", family: "matte_black", luxuryPoints: 3, wearResistance: 4, swatchHex: "#1F1F21" },
 ];

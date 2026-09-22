@@ -7,7 +7,6 @@ import {
   type BuildOutput,
   type DecorProposal,
   type PlacedDecor,
-  type FixtureClass,
   type Plan,
   type FeatureTag,
   type FinishFamily,
@@ -19,6 +18,7 @@ import {
   FINISHES,
   STYLES,
   STYLE_PRESETS,
+  decorCaps,
   styleDecorProposal,
 } from "@kolher/engine";
 import "@fontsource/cormorant-garamond/600.css";
@@ -29,13 +29,18 @@ import {
   buildConfirmedInput,
   buildRoomPreview,
   createAppStore,
+  priorityTabs,
   resolveTaste,
   reoptimizeConfirmed,
   selectedPlan,
   solveConfirmed,
   type AppState,
+  type FixtureWants,
+  type OptionalFixture,
   type RoomSelection,
+  type SinkChoice,
 } from "./store.js";
+import { downscalePhoto, photoSizeError } from "./photo.js";
 import { mountRender3d } from "./render3d/index.js";
 import { dragCandidate, type DragCandidate, type DragTarget } from "./roomDrag.js";
 import { roomAiPanel } from "./ai-panels.js";
@@ -48,7 +53,7 @@ let revealedDecorKey: string | undefined;
 const decorCache = new Map<string, DecorProposal>();
 let decorController: AbortController | undefined;
 let decorStartedAt = 0;
-const DECOR_TIMEOUT_MS = 12000;
+const DECOR_TIMEOUT_MS = 30000; // T-044: the server waits up to 25 s for a free model
 
 const catalog = loadCatalog().state;
 const store = createAppStore();
@@ -75,15 +80,6 @@ const AVAILABLE_FINISH_FAMILIES = new Set<FinishFamily>(
     .map((finishId) => FAMILY_OF_FINISH.get(finishId))
     .filter((family) => family !== undefined),
 );
-const FIXTURE_LABELS: Record<FixtureClass, string> = {
-  toilet: "Toilet",
-  basin: "Basin",
-  faucet: "Faucet",
-  shower: "Shower",
-  tub: "Tub",
-  vanity: "Vanity",
-  accessory: "Accessory",
-};
 
 function esc(value: string): string {
   return value.replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[char] ?? char));
@@ -132,6 +128,21 @@ async function requestTradeoffs(output: BuildOutput): Promise<void> {
   store.dispatch({ type: "TRADEOFF_RESULT", value: output.menu.map((item) => item.tradeoffDelta) });
 }
 
+/** T-043: in a large room, ask the AI for more pieces (the engine tops up the rest). */
+function decorTarget(state: AppState): { targetItems?: number } {
+  const polygon = state.preview?.polygon;
+  if (!polygon) return {};
+  const { extraItems } = decorCaps({ polygon, openings: [], fixtures: [], annotations: [] });
+  return extraItems > 0 ? { targetItems: Math.min(24, 8 + extraItems) } : {};
+}
+
+/** Two décor keys (see decorKey) for the same taste text and style preset. */
+function sameDecorTaste(a: string, b: string): boolean {
+  const [, textA, presetA] = JSON.parse(a) as unknown[];
+  const [, textB, presetB] = JSON.parse(b) as unknown[];
+  return textA === textB && presetA === presetB;
+}
+
 /** Ask the server for taste-driven décor for the active plan. One request in flight;
  *  never retried; AI results cached per key; any failure falls back to offline décor. */
 async function requestDecor(): Promise<void> {
@@ -143,7 +154,14 @@ async function requestDecor(): Promise<void> {
   decorController?.abort();
   decorController = undefined;
   const cached = decorCache.get(key);
+  // T-041: décor follows the taste, not the tab. Reuse the current style for another
+  // plan of the same brief (re-placed on its fixtures) instead of a new AI call.
+  const reuse = state.decor && sameDecorTaste(state.decor.key, key) ? state.decor : undefined;
   store.dispatch({ type: "DECOR_START", key });
+  if (reuse) {
+    store.dispatch({ type: "DECOR_RESULT", key, proposal: reuse.proposal, source: reuse.source });
+    return;
+  }
   // A chosen style preset is curated and deterministic: no NIM call (40 RPM budget).
   if (state.taste.stylePreset) {
     store.dispatch({ type: "DECOR_RESULT", key, proposal: styleDecorProposal(state.taste.stylePreset), source: "style" });
@@ -162,7 +180,7 @@ async function requestDecor(): Promise<void> {
     const response = await fetch("/api/nim", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ request: "decor", text, fixtures: decorFixtures(plan) }),
+      body: JSON.stringify({ request: "decor", text, fixtures: decorFixtures(plan), ...decorTarget(state) }),
       signal: AbortSignal.any([controller.signal, AbortSignal.timeout(DECOR_TIMEOUT_MS)]),
     });
     if (response.ok) body = await response.json();
@@ -263,7 +281,7 @@ export function roomScreen(state: AppState): string {
   return shell(state, `<section class="screen room-screen">
     <div class="screen-copy"><h1>Make the room measurable.</h1><p class="lede">Start with the dimensions you trust. Add a photo for context, then confirm the outline before any design is generated.</p><div class="trust-note"><span class="trust-icon" aria-hidden="true"></span><span><strong>Your dimensions stay in charge.</strong><br />AI can suggest cues, never authoritative geometry.</span></div>
       <form class="form-stack" data-form="room"><fieldset><legend>Room outline</legend><div class="segmented" role="group" aria-label="Room shape"><button type="button" aria-pressed="${room.shape === "rectangle"}" class="segment ${room.shape === "rectangle" ? "selected" : ""}" data-shape="rectangle">Rectangle</button><button type="button" aria-pressed="${room.shape === "l-shape"}" class="segment ${room.shape === "l-shape" ? "selected" : ""}" data-shape="l-shape">L-shape</button></div><div class="field-grid">${numberField("widthMm", "Width", room.widthMm, "2400", "mm")}${numberField("depthMm", "Depth", room.depthMm, "1800", "mm")}</div>${room.shape === "l-shape" ? `<div class="field-grid l-fields">${numberField("notchWidthMm", "Cut width", room.notchWidthMm, "900", "mm")}${numberField("notchDepthMm", "Cut depth", room.notchDepthMm, "900", "mm")}</div>` : ""}</fieldset>
-        <fieldset><legend>Photo context <span class="optional">optional</span></legend><label class="upload-zone" for="room-photo"><span class="upload-icon">${icon("upload")}</span><span><strong>${room.photoName ? esc(room.photoName) : "Add a room photo"}</strong><small>AI reads doors and windows for you to review · JPG, PNG up to 700 KB</small></span><input id="room-photo" type="file" accept="image/png,image/jpeg" /></label>${state.photoStatus === "loading" ? `<p class="inline-status loading" role="status"><span class="spinner"></span>${esc(state.photoMessage ?? "Reading doors and windows from your photo…")}</p>` : state.photoMessage ? `<p class="inline-status ${state.photoStatus === "error" ? "error" : "success"}" role="${state.photoStatus === "error" ? "alert" : "status"}">${esc(state.photoMessage)}</p>` : ""}</fieldset>
+        <fieldset><legend>Photo context <span class="optional">optional</span></legend><label class="upload-zone" for="room-photo"><span class="upload-icon">${icon("upload")}</span><span><strong>${room.photoName ? esc(room.photoName) : "Add a room photo"}</strong><small>AI reads doors and windows for you to review · JPG, PNG up to 10 MB</small></span><input id="room-photo" type="file" accept="image/png,image/jpeg" /></label>${state.photoStatus === "loading" ? `<p class="inline-status loading" role="status"><span class="spinner"></span>${esc(state.photoMessage ?? "Reading doors and windows from your photo…")}</p>` : state.photoMessage ? `<p class="inline-status ${state.photoStatus === "error" ? "error" : "success"}" role="${state.photoStatus === "error" ? "alert" : "status"}">${esc(state.photoMessage)}</p>` : ""}</fieldset>
         ${state.roomError ? `<p class="form-error" role="alert">${esc(state.roomError)}</p>` : ""}<button class="primary-button" type="button" data-action="preview-room">Preview room ${icon("arrow")}</button>
       </form>
       ${roomAiPanel(state)}
@@ -276,6 +294,16 @@ function numberField(field: string, label: string, value: string, placeholder: s
   return `<label class="field"><span>${label}</span><div class="input-wrap"><input inputmode="decimal" data-room-field="${field}" value="${esc(value)}" placeholder="${placeholder}" /><b>${suffix}</b></div></label>`;
 }
 
+const SINK_LABELS: Record<SinkChoice, string> = { auto: "Auto", vanity: "Vanity", basin: "Standalone basin" };
+const OPTIONAL_FIXTURES: [OptionalFixture, string][] = [["shower", "Shower"], ["tub", "Tub"], ["accessory", "Accessories"]];
+
+/** T-036 wanted-fixtures list, shared by the Taste page and the Result adjust panel. */
+export function fixtureList(wants: FixtureWants): string {
+  const box = (name: string, checked: boolean, attrs: string) => `<label class="fixture-want"><input type="checkbox" ${checked ? "checked" : ""} ${attrs} /><span>${name}</span></label>`;
+  const noWet = !wants.shower && !wants.tub;
+  return `<fieldset class="fixture-list"><legend>What you want in the bathroom</legend><div class="fixture-wants">${box("Toilet", true, "disabled")}<small class="fixture-lock">Required</small>${OPTIONAL_FIXTURES.map(([key, label]) => box(label, wants[key], `data-fixture-want="${key}"`)).join("")}</div><div class="choice-row"><span class="choice-label">Sink</span><div class="segmented wide">${(Object.keys(SINK_LABELS) as SinkChoice[]).map((value) => `<button type="button" aria-pressed="${wants.sink === value}" class="segment ${wants.sink === value ? "selected" : ""}" data-sink="${value}">${SINK_LABELS[value]}</button>`).join("")}</div></div>${noWet ? `<p class="inline-status error" role="alert">Choose a shower, a tub, or both.</p>` : ""}</fieldset>`;
+}
+
 function tasteScreen(state: AppState): string {
   const taste = state.taste;
   const features = taste.featureConstraints.requiredFeatures.filter((tag) => FEATURE_LABELS[tag]);
@@ -284,7 +312,7 @@ function tasteScreen(state: AppState): string {
   return shell(state, `<section class="screen taste-screen"><div class="screen-copy"><button class="back-link" data-action="go-room">← Edit room</button><h1>Give the room a point of view.</h1><p class="lede">Describe the feeling in your own words. The AI maps it to closed catalog features; the engine remains the final authority.</p>
       <form class="form-stack" data-form="taste">${styleCards(taste.stylePreset)}<div class="taste-columns"><div class="taste-col"><fieldset><legend>What should it feel like?</legend><textarea data-taste-text maxlength="4000" placeholder="For example: a calm, modern guest bath with a rain shower, chrome fittings, and low-flow fixtures.">${esc(taste.text)}</textarea><div class="taste-actions"><button class="secondary-button" type="button" data-action="analyze-taste" ${state.tasteStatus === "loading" ? "disabled" : ""}>${state.tasteStatus === "loading" ? "Mapping…" : "Map taste to features"} ${icon("arrow")}</button><span class="ai-badge ${state.aiPosture}"><i></i>${state.aiPosture === "offline" ? "Offline fallback ready" : "AI adapter connected"}</span></div>${state.tasteMessage ? `<p class="inline-status ${state.tasteStatus === "error" ? "error" : "success"}">${esc(state.tasteMessage)}</p>` : ""}</fieldset>
         <fieldset><legend>Feature constraints <span class="optional">editable</span></legend><div class="chip-list">${features.length ? features.map((tag) => `<button type="button" aria-pressed="true" class="chip selected" data-feature="${tag}">${esc(FEATURE_LABELS[tag] ?? tag)} ×</button>`).join("") : `<span class="chip-empty">No required features yet. Map taste or choose below.</span>`}</div><div class="chip-list suggestion-list">${(["rain_shower", "thermostatic", "low_flow", "smart", "soft_close"] as FeatureTag[]).filter((tag) => AVAILABLE_TAGS.has(tag)).map((tag) => `<button type="button" aria-pressed="${features.includes(tag)}" class="chip suggestion ${features.includes(tag) ? "selected" : ""}" data-feature="${tag}">${esc(FEATURE_LABELS[tag] ?? tag)}</button>`).join("")}</div><div class="chip-list finish-list">${Object.entries(FINISH_LABELS).filter(([family]) => AVAILABLE_FINISH_FAMILIES.has(family as FinishFamily)).map(([family, label]) => `<button type="button" aria-pressed="${finishes.includes(family as FinishFamily)}" class="chip finish-chip ${finishes.includes(family as FinishFamily) ? "selected" : ""}" data-finish="${family}">${esc(label)}</button>`).join("")}</div></fieldset></div>
-        <div class="taste-col taste-solve"><fieldset><legend>Steer the trade-off</legend><label class="select-field"><span>Priority</span><select data-priority>${(["value", "balanced", "luxury", "eco-low-maintenance"] as Priority[]).map((value) => `<option value="${value}" ${taste.priority === value ? "selected" : ""}>${value === "eco-low-maintenance" ? "Eco + low maintenance" : value[0].toUpperCase() + value.slice(1)}</option>`).join("")}</select></label><div class="choice-row"><span class="choice-label">Spaciousness</span><div class="segmented wide">${(["compact", "balanced", "airy"] as Spaciousness[]).map((value) => `<button type="button" aria-pressed="${taste.spaciousness === value}" class="segment ${taste.spaciousness === value ? "selected" : ""}" data-spaciousness="${value}">${value[0].toUpperCase() + value.slice(1)}</button>`).join("")}</div></div><div class="field-grid budget-fields">${numberField("bTarget", "Target budget", taste.bTarget, "180000", "₹")}${numberField("bMax", "Maximum budget", taste.bMax, "250000", "₹")}</div></fieldset>
+        <div class="taste-col taste-solve">${fixtureList(taste.fixtures)}<fieldset><legend>Steer the trade-off</legend><p class="section-note">The result shows a Value, Balanced, Eco and Luxury plan inside your budget.</p><div class="choice-row"><span class="choice-label">Spaciousness</span><div class="segmented wide">${(["compact", "balanced", "airy"] as Spaciousness[]).map((value) => `<button type="button" aria-pressed="${taste.spaciousness === value}" class="segment ${taste.spaciousness === value ? "selected" : ""}" data-spaciousness="${value}">${value[0].toUpperCase() + value.slice(1)}</button>`).join("")}</div></div><div class="field-grid budget-fields">${numberField("bTarget", "Target budget", taste.bTarget, "180000", "₹")}${numberField("bMax", "Maximum budget", taste.bMax, "250000", "₹")}</div></fieldset>
         <button class="primary-button" type="button" data-action="generate" ${state.solveStatus === "loading" ? "disabled" : ""}>Generate validated plan ${icon("arrow")}</button>${planMessage}</div></div>
       </form></div></section>`);
 }
@@ -296,9 +324,6 @@ function outputSummary(output: AppState["output"]): string {
   return `<div class="inline-status error" role="alert">No buildable plan fits this brief yet. ${esc(output.outOfScope.finalBlocker)}</div>`;
 }
 
-function fixtureLabel(value: FixtureClass): string {
-  return FIXTURE_LABELS[value];
-}
 
 function resultVisual(plan: Plan, state: AppState): string {
   return `<div class="render-panel">
@@ -332,8 +357,12 @@ function decorOverlay(plan: Plan, state: AppState): string {
 
 /** Caption suffix when the render adds a presentation-only counter under standalone deck products. */
 function supportNote(plan: Plan): string {
-  const deck = plan.selectedCandidate.bindings.some((b) => (b.fixture.class === "basin" && !b.fixture.featureTags.includes("wall_mount")) || b.fixture.class === "faucet");
-  return deck ? " · counter under basin/faucet shown for context, not included" : "";
+  const basins = plan.selectedCandidate.bindings.filter((b) => b.fixture.class === "basin");
+  const wallMount = (skuId: string) => /wall-(mount|hung)/.test(catalog.skus.find((s) => s.model_id === skuId)?.name.toLowerCase() ?? "");
+  const notes: string[] = [];
+  if (basins.some((b) => !wallMount(b.fixture.skuId))) notes.push("counter and cabinet under the basin shown for context, not included");
+  if (basins.some((b) => wallMount(b.fixture.skuId))) notes.push("waste trap shown for context, not included");
+  return notes.map((n) => ` · ${n}`).join("");
 }
 
 const FLOOR_LABELS: Record<string, string> = { marble: "Marble", microcement: "Microcement", hinoki: "Hinoki", oak: "Oak", "white-oak": "White oak", herringbone: "Herringbone", granite: "Granite" };
@@ -354,11 +383,16 @@ function decorCaption(plan: Plan, state: AppState): string {
   const source = state.decor?.key === key ? state.decor.source : "ai";
   const origin = source === "style" && state.taste.stylePreset ? `curated for ${STYLES[state.taste.stylePreset].label}` : `styled ${source === "offline" ? "offline" : "by AI"} from your taste`;
   const support = supportNote(plan);
-  return `<p class="render-decor-note">Décor ${esc(origin)} · not KOHLER products · not in the BOM${support}</p>`;
+  return `<p class="render-decor-note">Décor and lights ${esc(origin)} · not KOHLER products · not in the budget or BOM${support}</p>`;
 }
 
-function planBOM(plan: Plan, state: AppState): string {
-  const rows = plan.bom.lineItems.map((item) => `<tr><td><strong>${esc(item.model_id)}</strong><small>${item.qty} × ${item.finish ? esc(item.finish) : "Catalog finish"}</small></td><td>${money(item.price * item.qty)}</td></tr>`).join("");
+/** Catalog product name for a BOM model id (T-035); the id alone is unreadable. */
+function productName(modelId: string): string {
+  return catalog.skus.find((sku) => sku.model_id === modelId)?.name ?? modelId;
+}
+
+export function planBOM(plan: Plan, state: AppState): string {
+  const rows = plan.bom.lineItems.map((item) => `<tr><td><strong>${esc(productName(item.model_id))}</strong><small>${esc(item.model_id)} · ${item.qty} × ${item.finish ? esc(item.finish) : "Catalog finish"}</small></td><td>${money(item.price * item.qty)}</td></tr>`).join("");
   return `<section class="result-section bom-section"><div class="section-heading"><div><span class="panel-label">Bill of materials</span><h2>What the plan calls for</h2></div><button class="secondary-button compact" data-action="export-bom" ${state.adjustmentsDirty ? "disabled title=\"Re-optimize before exporting\"" : ""}>Download BOM</button></div><div class="bom-table-wrap"><table class="bom-table"><thead><tr><th>Model</th><th>Line total</th></tr></thead><tbody>${rows || `<tr><td colspan="2">No line items were returned.</td></tr>`}</tbody><tfoot><tr><th>Total</th><th>${money(plan.bom.total)}</th></tr></tfoot></table></div></section>`;
 }
 
@@ -367,8 +401,7 @@ function adjustmentPanel(state: AppState): string {
   const door = state.preview?.openings.find((opening) => opening.kind === "door");
   const wall = state.preview ? buildWallStrips(state.preview.polygon).find((strip) => strip.id === door?.wallId) : undefined;
   const maxDoor = Math.max(0, (wall?.usableLengthMm ?? 700) - (door?.spanMm ?? 700));
-  const fixtureOptions = (["", ...Object.keys(FIXTURE_LABELS)] as (FixtureClass | "")[]).map((value) => `<option value="${value}" ${state.adjustments.fixtureClass === value ? "selected" : ""}>${value ? `Require ${fixtureLabel(value)}` : "Keep current fixture mix"}</option>`).join("");
-  return `<section class="adjust-panel"><div class="section-heading"><div><span class="panel-label">Adjust and re-roll</span><h2>Change the brief, keep the proof</h2></div><span class="panel-chip">Deterministic re-run</span></div><p class="section-note">Every change below re-enters the same validator. The current plan stays visible until a completed result replaces it.</p><div class="adjust-grid"><label class="select-field"><span>Priority</span><select data-adjust-priority>${(["value", "balanced", "luxury", "eco-low-maintenance"] as Priority[]).map((value) => `<option value="${value}" ${taste.priority === value ? "selected" : ""}>${value === "eco-low-maintenance" ? "Eco + low maintenance" : value[0].toUpperCase() + value.slice(1)}</option>`).join("")}</select></label><label class="select-field"><span>Fixture mix</span><select data-fixture-class>${fixtureOptions}</select></label><div class="choice-row"><span class="choice-label">Spaciousness</span><div class="segmented wide">${(["compact", "balanced", "airy"] as Spaciousness[]).map((value) => `<button type="button" aria-pressed="${taste.spaciousness === value}" class="segment ${taste.spaciousness === value ? "selected" : ""}" data-adjust-spaciousness="${value}">${value[0].toUpperCase() + value.slice(1)}</button>`).join("")}</div></div><div class="field-grid budget-fields"><label class="field"><span>Target budget</span><div class="input-wrap"><input data-adjust-budget="bTarget" inputmode="numeric" value="${esc(taste.bTarget)}" /><b>₹</b></div></label><label class="field"><span>Maximum budget</span><div class="input-wrap"><input data-adjust-budget="bMax" inputmode="numeric" value="${esc(taste.bMax)}" /><b>₹</b></div></label></div><label class="range-field"><span><span>Door position</span><strong>${esc(state.adjustments.doorOffsetMm)} mm from wall start</strong></span><input type="range" data-door-offset min="0" max="${maxDoor}" step="25" value="${esc(state.adjustments.doorOffsetMm || "0")}" /></label></div><button class="primary-button" data-action="adjust" ${state.solveStatus === "loading" ? "disabled" : ""}>Re-optimize validated plan ${icon("arrow")}</button>${state.solveStatus === "loading" ? `<div class="inline-status loading"><span class="spinner"></span>Re-checking geometry, compatibility, and budget…</div>` : state.solveMessage ? `<div class="inline-status error" role="alert">${esc(state.solveMessage)}</div>` : ""}</section>`;
+  return `<section class="adjust-panel"><div class="section-heading"><div><span class="panel-label">Adjust and re-roll</span><h2>Change the brief, keep the proof</h2></div><span class="panel-chip">Deterministic re-run</span></div><p class="section-note">Every change below re-enters the same validator. The current plan stays visible until a completed result replaces it.</p><div class="adjust-grid">${fixtureList(state.taste.fixtures)}<div class="choice-row"><span class="choice-label">Spaciousness</span><div class="segmented wide">${(["compact", "balanced", "airy"] as Spaciousness[]).map((value) => `<button type="button" aria-pressed="${taste.spaciousness === value}" class="segment ${taste.spaciousness === value ? "selected" : ""}" data-adjust-spaciousness="${value}">${value[0].toUpperCase() + value.slice(1)}</button>`).join("")}</div></div><div class="field-grid budget-fields"><label class="field"><span>Target budget</span><div class="input-wrap"><input data-adjust-budget="bTarget" inputmode="numeric" value="${esc(taste.bTarget)}" /><b>₹</b></div></label><label class="field"><span>Maximum budget</span><div class="input-wrap"><input data-adjust-budget="bMax" inputmode="numeric" value="${esc(taste.bMax)}" /><b>₹</b></div></label></div><label class="range-field"><span><span>Door position</span><strong>${esc(state.adjustments.doorOffsetMm)} mm from wall start</strong></span><input type="range" data-door-offset min="0" max="${maxDoor}" step="25" value="${esc(state.adjustments.doorOffsetMm || "0")}" /></label></div><button class="primary-button" data-action="adjust" ${state.solveStatus === "loading" ? "disabled" : ""}>Re-optimize validated plan ${icon("arrow")}</button>${state.solveStatus === "loading" ? `<div class="inline-status loading"><span class="spinner"></span>Re-checking geometry, compatibility, and budget…</div>` : state.solveMessage ? `<div class="inline-status error" role="alert">${esc(state.solveMessage)}</div>` : ""}</section>`;
 }
 
 function relaxationChoices(output: Extract<BuildOutput, { kind: "relaxation" }>, state: AppState): string {
@@ -403,7 +436,22 @@ function resultScreen(state: AppState): string {
   const plan = activePlan(state);
   if (!plan) return shell(state, `<section class="result-screen"><div class="empty-state"><strong>Select a validated alternative to continue.</strong></div></section>`);
   const isRelaxation = output.kind === "relaxation";
-  return shell(state, `<section class="result-screen"><div class="result-header"><div><button class="back-link" data-action="go-taste">← Edit brief</button><span class="panel-label">${isRelaxation ? "Validated recovery path" : "Validated result"}</span><h1>${isRelaxation ? "A buildable way forward." : "A plan you can price."}</h1><p class="lede">${isRelaxation ? "Pick the measured trade-off that matters least, then inspect the same proof used to validate it." : "A deterministic candidate, a costed BOM, and a render sourced from the exact same geometry."}</p></div><div class="result-kpi"><span>Total plan</span><strong>${money(plan.cost)}</strong><small>${plan.selectedCandidate.bindings.length} fixtures · ${plan.budgetSummary.bMax >= plan.cost ? "within maximum budget" : "budget check failed"}</small></div></div>${isRelaxation ? relaxationChoices(output, state) : ""}<div class="result-layout"><div>${resultVisual(plan, state)}${planBOM(plan, state)}</div></div>${adjustmentPanel(state)}<div class="result-export"><div><span class="panel-label">Take it away</span><h2>Export the checked plan</h2><p>${state.adjustmentsDirty ? "Re-optimize before exporting so the artifact matches your pending changes." : "Download the BOM as CSV or the exact 2D layout as a PNG."}</p></div><div class="button-row"><button class="secondary-button" data-action="export-bom" ${state.adjustmentsDirty ? "disabled title=\"Re-optimize before exporting\"" : ""}>Download BOM</button><button class="primary-button" data-action="export-layout" ${state.adjustmentsDirty ? "disabled title=\"Re-optimize before exporting\"" : ""}>Download 2D layout</button></div></div></section>`);
+  return shell(state, `<section class="result-screen"><div class="result-header"><div><button class="back-link" data-action="go-taste">← Edit brief</button><span class="panel-label">${isRelaxation ? "Validated recovery path" : "Validated result"}</span><h1>${isRelaxation ? "A buildable way forward." : "A plan you can price."}</h1><p class="lede">${isRelaxation ? "Pick the measured trade-off that matters least, then inspect the same proof used to validate it." : "A deterministic candidate, a costed BOM, and a render sourced from the exact same geometry."}</p></div><div class="result-kpi"><span>Total plan</span><strong>${money(plan.cost)}</strong><small>${plan.selectedCandidate.bindings.length} fixtures · ${plan.budgetSummary.bMax >= plan.cost ? "within maximum budget" : "budget check failed"}</small></div></div>${isRelaxation ? relaxationChoices(output, state) : ""}${priorityTabBar(state)}<div class="result-layout"><div>${resultVisual(plan, state)}${planBOM(plan, state)}</div></div>${adjustmentPanel(state)}<div class="result-export"><div><span class="panel-label">Take it away</span><h2>Export the checked plan</h2><p>${state.adjustmentsDirty ? "Re-optimize before exporting so the artifact matches your pending changes." : "Download the BOM as CSV or the exact 2D layout as a PNG."}</p></div><div class="button-row"><button class="secondary-button" data-action="export-bom" ${state.adjustmentsDirty ? "disabled title=\"Re-optimize before exporting\"" : ""}>Download BOM</button><button class="primary-button" data-action="export-layout" ${state.adjustmentsDirty ? "disabled title=\"Re-optimize before exporting\"" : ""}>Download 2D layout</button></div></div></section>`);
+}
+
+const PRIORITY_LABELS: Record<Priority, string> = { value: "Value", balanced: "Balanced", "eco-low-maintenance": "Eco", luxury: "Luxury" };
+
+/** T-041: Value / Balanced / Eco / Luxury plans, each validated, priced against the selected one. */
+export function priorityTabBar(state: AppState): string {
+  const tabs = priorityTabs(state);
+  if (tabs.length === 0) return "";
+  const selected = tabs.find((t) => t.priority === state.taste.priority) ?? tabs[0];
+  return `<div class="priority-tabs" role="group" aria-label="Plan lean">${tabs.map((tab) => {
+    const on = tab === selected;
+    const delta = tab.plan.cost - selected.plan.cost;
+    const diff = on || delta === 0 ? "" : `<small>${delta > 0 ? "+" : "−"}${money(Math.abs(delta))}</small>`;
+    return `<button type="button" class="priority-tab ${on ? "selected" : ""}" data-priority-tab="${tab.priority}" aria-pressed="${on}"><span>${PRIORITY_LABELS[tab.priority]}</span><strong>${money(tab.plan.cost)}</strong>${diff}${tab.sameAs ? `<em>Same as ${PRIORITY_LABELS[tab.sameAs]}</em>` : ""}</button>`;
+  }).join("")}</div>`;
 }
 
 function selectRoomElement(selection: RoomSelection): void {
@@ -507,7 +555,6 @@ function bindEvents(): void {
   root.querySelectorAll<HTMLInputElement>("[data-room-field='widthMm'], [data-room-field='depthMm'], [data-room-field='notchWidthMm'], [data-room-field='notchDepthMm']").forEach((input) => input.addEventListener("input", () => store.dispatch({ type: "SET_ROOM_FIELD", field: input.dataset.roomField as "widthMm" | "depthMm" | "notchWidthMm" | "notchDepthMm", value: input.value })));
   root.querySelectorAll<HTMLButtonElement>("[data-shape]").forEach((button) => button.addEventListener("click", () => store.dispatch({ type: "SET_ROOM_SHAPE", shape: button.dataset.shape as "rectangle" | "l-shape" })));
   root.querySelector<HTMLTextAreaElement>("[data-taste-text]")?.addEventListener("input", (event) => store.dispatch({ type: "SET_TASTE_TEXT", value: (event.target as HTMLTextAreaElement).value }));
-  root.querySelector<HTMLSelectElement>("[data-priority]")?.addEventListener("change", (event) => store.dispatch({ type: "SET_PRIORITY", value: (event.target as HTMLSelectElement).value as Priority }));
   root.querySelectorAll<HTMLButtonElement>("[data-spaciousness]").forEach((button) => button.addEventListener("click", () => store.dispatch({ type: "SET_SPACIOUSNESS", value: button.dataset.spaciousness as Spaciousness })));
   root.querySelectorAll<HTMLButtonElement>("[data-feature]").forEach((button) => button.addEventListener("click", () => store.dispatch({ type: "TOGGLE_FEATURE", tag: button.dataset.feature as FeatureTag })));
   root.querySelectorAll<HTMLButtonElement>("[data-style-preset]").forEach((button) => button.addEventListener("click", () => {
@@ -528,8 +575,12 @@ function bindEvents(): void {
   });
   root.querySelectorAll<HTMLButtonElement>("[data-finish]").forEach((button) => button.addEventListener("click", () => store.dispatch({ type: "SET_FINISH_FAMILY", family: button.dataset.finish as FinishFamily })));
   root.querySelectorAll<HTMLInputElement>("[data-room-field='bTarget'], [data-room-field='bMax']").forEach((input) => input.addEventListener("input", () => store.dispatch({ type: "SET_BUDGET", field: input.dataset.roomField as "bTarget" | "bMax", value: input.value })));
-  root.querySelector<HTMLSelectElement>("[data-adjust-priority]")?.addEventListener("change", (event) => store.dispatch({ type: "SET_PRIORITY", value: (event.target as HTMLSelectElement).value as Priority }));
-  root.querySelector<HTMLSelectElement>("[data-fixture-class]")?.addEventListener("change", (event) => store.dispatch({ type: "SET_FIXTURE_CLASS", value: (event.target as HTMLSelectElement).value as FixtureClass | "" }));
+  root.querySelectorAll<HTMLButtonElement>("[data-priority-tab]").forEach((button) => button.addEventListener("click", () => {
+    store.dispatch({ type: "SELECT_PRIORITY", value: button.dataset.priorityTab as Priority });
+    void requestDecor();
+  }));
+  root.querySelectorAll<HTMLInputElement>("[data-fixture-want]").forEach((input) => input.addEventListener("change", () => store.dispatch({ type: "SET_FIXTURE_WANT", fixture: input.dataset.fixtureWant as OptionalFixture, value: input.checked })));
+  root.querySelectorAll<HTMLButtonElement>("[data-sink]").forEach((button) => button.addEventListener("click", () => store.dispatch({ type: "SET_SINK", value: button.dataset.sink as SinkChoice })));
   root.querySelectorAll<HTMLButtonElement>("[data-adjust-spaciousness]").forEach((button) => button.addEventListener("click", () => store.dispatch({ type: "SET_SPACIOUSNESS", value: button.dataset.adjustSpaciousness as Spaciousness })));
   root.querySelectorAll<HTMLInputElement>("[data-adjust-budget]").forEach((input) => input.addEventListener("input", () => store.dispatch({ type: "SET_BUDGET", field: input.dataset.adjustBudget as "bTarget" | "bMax", value: input.value })));
   root.querySelector<HTMLInputElement>("[data-door-offset]")?.addEventListener("input", (event) => store.dispatch({ type: "SET_DOOR_OFFSET", value: (event.target as HTMLInputElement).value }));
@@ -539,16 +590,13 @@ function bindEvents(): void {
 
 async function handlePhoto(file: File | undefined): Promise<void> {
   if (!file) return;
-  if (file.size > 700_000) {
-    store.dispatch({ type: "SET_PHOTO_STATUS", status: "error", message: "That image is larger than 700 KB. Choose a smaller photo." });
+  const sizeError = photoSizeError(file.size);
+  if (sizeError) {
+    store.dispatch({ type: "SET_PHOTO_STATUS", status: "error", message: sizeError });
     return;
   }
-  const dataUrl = await new Promise<string>((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => typeof reader.result === "string" ? resolve(reader.result) : reject(new Error("invalid photo"));
-    reader.onerror = () => reject(reader.error ?? new Error("photo read failed"));
-    reader.readAsDataURL(file);
-  }).catch(() => null);
+  // T-038: shrink in the browser so the request stays under the server's photo limit.
+  const dataUrl = await downscalePhoto(file);
   if (!dataUrl) {
     store.dispatch({ type: "SET_PHOTO_STATUS", status: "error", message: "This photo could not be read. Try another image." });
     return;
@@ -650,7 +698,7 @@ async function handleAction(action: string, value?: number): Promise<void> {
     store.dispatch({ type: "SOLVE_START" });
     const result = solveConfirmed(store.getState(), catalog);
     if (result.ok) {
-      store.dispatch({ type: "SOLVE_RESULT", output: result.output });
+      store.dispatch({ type: "SOLVE_RESULT", output: result.output, profiles: result.profiles });
       void requestTradeoffs(result.output);
       void requestDecor();
     } else {
@@ -674,7 +722,7 @@ async function handleAction(action: string, value?: number): Promise<void> {
     store.dispatch({ type: "SOLVE_START", preserveOutput: true });
     const result = reoptimizeConfirmed(before, catalog, change);
     if (result.ok) {
-      store.dispatch({ type: "SOLVE_RESULT", output: result.output });
+      store.dispatch({ type: "SOLVE_RESULT", output: result.output, profiles: result.profiles });
       void requestTradeoffs(result.output);
       void requestDecor();
     } else {
@@ -685,8 +733,7 @@ async function handleAction(action: string, value?: number): Promise<void> {
   if (action === "export-bom") {
     const plan = activePlan(state);
     if (!plan || state.adjustmentsDirty) return;
-    const rows = ["model_id,quantity,finish,price,total", ...plan.bom.lineItems.map((item) => [item.model_id, item.qty, item.finish ?? "", item.price, item.price * item.qty].map(csvCell).join(","))];
-    downloadFile(`kohler-plan-${plan.id}.csv`, "text/csv;charset=utf-8", rows.join("\n"));
+    downloadFile(`kohler-plan-${plan.id}.csv`, "text/csv;charset=utf-8", bomCsv(plan));
     return;
   }
   if (action === "export-layout") {
@@ -701,6 +748,11 @@ async function handleAction(action: string, value?: number): Promise<void> {
       store.dispatch({ type: "SOLVE_ERROR", message: "The 3D scene could not be exported because its authoritative geometry was unavailable." });
     }
   }
+}
+
+export function bomCsv(plan: Plan): string {
+  const rows = ["model_id,name,quantity,finish,price,total", ...plan.bom.lineItems.map((item) => [item.model_id, productName(item.model_id), item.qty, item.finish ?? "", item.price, item.price * item.qty].map(csvCell).join(","))];
+  return rows.join("\n");
 }
 
 function csvCell(value: string | number): string {

@@ -289,4 +289,67 @@ export const VERIFIED_ADDITIONS: SKU[] = [
     "wall-face-center", "body", ["wall_mount"], undefined,
     "Polished Chrome and wall mounting with included hardware/hex wrench per PDP. Mounting elevation, substrate strength and towel clearances require installer verification.",
   ),
+
+  // T-042 premium additions (checked 2026-09-22 against official India PDPs; MRP and
+  // dimensions from embedded Color.GST.Details_ss and ProductOverall*Inches_s fields).
+  ...premiumAdditions(),
 ];
+
+function premiumAdditions(): SKU[] {
+  // Same evidence shape as above; these pages were checked on a later date.
+  const premium = (sku: SKU): SKU => JSON.parse(JSON.stringify(sku).replaceAll(`"checkedOn":"${checkedOn}"`, '"checkedOn":"2026-09-22"')) as SKU;
+  const components = "https://www.kohler.co.in/p/washbasins/components-single-handle-bathroom-sink-faucet-with-row-spout-and-oyl-handle-8-3-lpm-ex28093in-8";
+  const componentsTall = "https://www.kohler.co.in/p/washbasins/components-tall-single-handle-bathroom-sink-faucet-with-row-spout-and-oyl-handle-8-3-lpm-ex28094in-8";
+  const statement = "https://www.kohler.co.in/p/showers/statement-oblong-353-mm-single-function-rainhead-9-5-lpm-26294in";
+  const modernLife = "https://www.kohler.co.in/p/showers/modernlife-dual-flow-330-x-230mm-rainhead-in-brushed-bronze-24470in";
+  return [
+    product("K-EX28093IN-8-BL", "Components single-handle bathroom sink faucet with Row spout and Oyl handle, 8.3 lpm, Matte Black", "faucet",
+      { w: 47.6, d: 134.9, h: 193.7 }, 39500, components, "Embedded overall Width=1-7/8, Length=5-5/16, Height=7-5/8 inches. Converted ×25.4, rounded to 0.1 mm; length maps to projection depth.",
+      "deck-center", "body", ["deck_mount", "single_lever"], { flowRateLpm: 8.3 },
+      "Color.GST.Details_ss binds EX28093IN-8-BL to Matte Black and MRP 39500. 8.3 lpm at 4.14 bar; includes pop-up drain.", "matte_black"),
+    product("K-EX28093IN-8-AF", "Components single-handle bathroom sink faucet with Row spout and Oyl handle, 8.3 lpm, Vibrant French Gold", "faucet",
+      { w: 47.6, d: 134.9, h: 193.7 }, 39500, components, "Embedded overall Width=1-7/8, Length=5-5/16, Height=7-5/8 inches. Converted ×25.4, rounded to 0.1 mm; length maps to projection depth.",
+      "deck-center", "body", ["deck_mount", "single_lever"], { flowRateLpm: 8.3 },
+      "Color.GST.Details_ss binds EX28093IN-8-AF to Vibrant French Gold and MRP 39500. 8.3 lpm at 4.14 bar; includes pop-up drain.", "vibrant_french_gold"),
+    product("K-EX28094IN-8-AF", "Components tall single-handle bathroom sink faucet with Row spout and Oyl handle, 8.3 lpm, Vibrant French Gold", "faucet",
+      { w: 47.6, d: 185.7, h: 296.9 }, 49400, componentsTall, "Embedded overall Width=1-7/8, Length=7-5/16, Height=11-11/16 inches. Converted ×25.4, rounded to 0.1 mm; length maps to projection depth.",
+      "deck-center", "body", ["deck_mount", "single_lever"], { flowRateLpm: 8.3 },
+      "Color.GST.Details_ss binds EX28094IN-8-AF to Vibrant French Gold and MRP 49400. Tall body for vessel basins; 18.6 cm reach, 8.3 lpm at 4.14 bar.", "vibrant_french_gold"),
+    product("K-EX28094IN-8-BL", "Components tall single-handle bathroom sink faucet with Row spout and Oyl handle, 8.3 lpm, Matte Black", "faucet",
+      { w: 47.6, d: 185.7, h: 296.9 }, 49400, componentsTall, "Embedded overall Width=1-7/8, Length=7-5/16, Height=11-11/16 inches. Converted ×25.4, rounded to 0.1 mm; length maps to projection depth.",
+      "deck-center", "body", ["deck_mount", "single_lever"], { flowRateLpm: 8.3 },
+      "Color.GST.Details_ss binds EX28094IN-8-BL to Matte Black and MRP 49400. Tall body for vessel basins; 18.6 cm reach, 8.3 lpm at 4.14 bar.", "matte_black"),
+    product("K-26294IN-BL", "Statement oblong 353 mm single-function rainhead, 9.5 lpm, Matte Black", "shower",
+      { w: 354, d: 203.2, h: 95.3 }, 58400, statement, "Embedded overall Width=13-15/16, Length=8, Height=3-3/4 inches. Converted ×25.4; sprayface axes map to w/d, thickness to h.",
+      "wall-face-center", "head", ["wall_mount", "rain_shower"], { flowRateLpm: 9.5 },
+      "Color.GST.Details_ss binds 26294IN-BL to Matte Black and MRP 58400. Katalyst full-coverage spray, 9.5 lpm at 3.1 bar. Head only: arm, valve and trim are separate.", "matte_black"),
+    product("K-26294IN-AF", "Statement oblong 353 mm single-function rainhead, 9.5 lpm, Vibrant French Gold", "shower",
+      { w: 354, d: 203.2, h: 95.3 }, 52300, statement, "Embedded overall Width=13-15/16, Length=8, Height=3-3/4 inches. Converted ×25.4; sprayface axes map to w/d, thickness to h.",
+      "wall-face-center", "head", ["wall_mount", "rain_shower"], { flowRateLpm: 9.5 },
+      "Color.GST.Details_ss binds 26294IN-AF to Vibrant French Gold and MRP 52300. Head only: arm, valve and trim are separate.", "vibrant_french_gold"),
+    product("K-24470IN-BL", "ModernLife rectangular 330 × 230 mm two-function rainhead, 12.0 lpm, Matte Black", "shower",
+      { w: 330.2, d: 230.2, h: 63.5 }, 58800, modernLife, "Embedded overall Width=9-1/16, Length=13, Height=2-1/2 inches. Converted ×25.4; sprayface axes map to w/d, thickness to h.",
+      "wall-face-center", "head", ["wall_mount", "rain_shower"], { flowRateLpm: 12 },
+      "Color.GST.Details_ss binds 24470IN-BL to Matte Black and MRP 58800. Rain and laminar sprays, 12.0 lpm at 5.5 bar. Head only.", "matte_black"),
+    product("K-24470IN-AF", "ModernLife rectangular 330 × 230 mm two-function rainhead, 12.0 lpm, Vibrant French Gold", "shower",
+      { w: 330.2, d: 230.2, h: 63.5 }, 52500, modernLife, "Embedded overall Width=9-1/16, Length=13, Height=2-1/2 inches. Converted ×25.4; sprayface axes map to w/d, thickness to h.",
+      "wall-face-center", "head", ["wall_mount", "rain_shower"], { flowRateLpm: 12 },
+      "Color.GST.Details_ss binds 24470IN-AF to Vibrant French Gold and MRP 52500. Head only.", "vibrant_french_gold"),
+    product("K-28784IN-7", "KOHLER VIVE 552 mm rectangular vessel bathroom sink, no overflow, Black", "basin",
+      { w: 546.1, d: 396.9, h: 173 }, 20000, "https://www.kohler.co.in/p/washbasins/vive-552-mm-rectangular-vessel-bathroom-sink-no-overflow-28784in",
+      "Embedded overall Length=21-1/2, Width=15-5/8, Height=6-13/16 inches. Converted ×25.4; length maps to along-wall width.",
+      "deck-center", "bowl", ["deck_mount", "overflow_none"], undefined,
+      "Color.GST.Details_ss binds 28784IN-7 to Black Black and MRP 20000. No faucet holes; needs a tall deck or wall faucet.", "black_ceramic"),
+    product("K-77171IN-7", "Veil 599 mm oval vessel bathroom sink, Black", "basin",
+      { w: 598.5, d: 450.8, h: 177.8 }, 25000, "https://www.kohler.co.in/p/washbasins/veil-vessel-sink-77171in",
+      "Embedded overall Length=23-9/16, Width=17-3/4, Height=7 inches. Converted ×25.4; length maps to along-wall width.",
+      "deck-center", "bowl", ["deck_mount"], undefined,
+      "Color.GST.Details_ss binds 77171IN-7 to Black Black and MRP 25000. No faucet holes; needs a tall deck or wall faucet.", "black_ceramic"),
+    product("K-30109IN-HB1", "Sveda 663 mm oval vessel bathroom sink, Honed Black", "basin",
+      { w: 663.6, d: 425.4, h: 192.1 }, 43500, "https://www.kohler.co.in/p/washbasins/sveda-663-mm-oval-vessel-bathroom-sink-30109in",
+      "Embedded overall Length=26-1/8, Width=16-3/4, Height=7-9/16 inches. Converted ×25.4; length maps to along-wall width.",
+      "deck-center", "bowl", ["deck_mount", "overflow_none"], undefined,
+      "Color.GST.Details_ss binds 30109IN-HB1 to Honed Black and MRP 43500. Slanted oval basin, no overflow, no faucet holes.", "black_ceramic"),
+  ].map(premium);
+}
+

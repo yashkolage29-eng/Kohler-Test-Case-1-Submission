@@ -2,7 +2,7 @@
 // bundled CC0 wood), fixture detail materials, and architecture (baseboards, window and
 // door framing). Presentation only; all positions derive from the SceneSpec.
 import * as THREE from "three";
-import { COUNTER_HEIGHT_MM, STYLES, type DecorStyle, type FloorMaterial, type WallMaterial } from "@kolher/engine";
+import { COUNTER_HEIGHT_MM, STYLES, type DecorStyle, type FloorMaterial, type StylePreset, type WallMaterial } from "@kolher/engine";
 import { basinDeckMm, type DetailMaterials } from "./detail.js";
 import type { OpeningSpec, PartSpec, SceneSpec } from "./sceneSpec.js";
 
@@ -65,6 +65,7 @@ const FINISH_PROPS: Record<string, { roughness: number; metalness: number }> = {
   matte_black: { roughness: 0.55, metalness: 0.2 },
   brushed_gold: { roughness: 0.25, metalness: 1 },
   vibrant_brushed_moderne_brass: { roughness: 0.25, metalness: 1 },
+  vibrant_french_gold: { roughness: 0.2, metalness: 1 },
 };
 
 const DEFAULT_WALL = "#cdc5b8";
@@ -157,12 +158,21 @@ function wallTexture(): THREE.CanvasTexture | null {
   return texture;
 }
 
-/** Wall paint: the lightest palette colour pulled toward a warm greige. */
+const lightnessOf = (color: THREE.Color): number => color.getHSL({ h: 0, s: 0, l: 0 }, THREE.SRGBColorSpace).l;
+
+/** T-039: a palette whose mean lightness is low asks for a dark room. */
+function isDarkPalette(palette: string[]): boolean {
+  return palette.length > 0 && palette.reduce((sum, hex) => sum + lightnessOf(new THREE.Color(hex)), 0) / palette.length < 0.35;
+}
+
+/** Wall paint: the lightest palette colour pulled toward a warm greige; a dark palette
+ *  paints graphite instead (its darkest colour, lifted slightly toward the greige). */
 export function wallHex(style?: RoomStyle): string {
   const palette = style?.palette ?? [];
   if (!palette.length) return DEFAULT_WALL;
-  const lightest = palette.map((hex) => new THREE.Color(hex)).sort((a, b) => b.getHSL({ h: 0, s: 0, l: 0 }).l - a.getHSL({ h: 0, s: 0, l: 0 }).l)[0];
-  return `#${new THREE.Color(DEFAULT_WALL).lerp(lightest, 0.25).getHexString()}`;
+  const byLightness = palette.map((hex) => new THREE.Color(hex)).sort((a, b) => lightnessOf(b) - lightnessOf(a));
+  if (isDarkPalette(palette)) return `#${byLightness[byLightness.length - 1].lerp(new THREE.Color(DEFAULT_WALL), 0.06).getHexString()}`;
+  return `#${new THREE.Color(DEFAULT_WALL).lerp(byLightness[0], 0.25).getHexString()}`;
 }
 
 let textureLoader: THREE.TextureLoader | undefined;
@@ -221,6 +231,7 @@ export function detailMaterials(finishHexById: (id: string | undefined) => strin
   const wood = (part: PartSpec): THREE.Material => (new THREE.Color(part.colorHex).getHSL({ h: 0, s: 0, l: 0 }).l < 0.45 ? walnut : oak);
   return {
     ceramic,
+    darkCeramic: new THREE.MeshPhysicalMaterial({ color: finishHexById("black_ceramic"), roughness: 0.35, metalness: 0, clearcoat: 0.6, clearcoatRoughness: 0.2 }),
     metal,
     wood,
     counter: new THREE.MeshPhysicalMaterial({ color: "#f2f0eb", roughness: 0.22, clearcoat: 0.6, clearcoatRoughness: 0.2 }),
@@ -233,19 +244,42 @@ export function detailMaterials(finishHexById: (id: string | undefined) => strin
   };
 }
 
-/** Floor and wall surfaces from the style preset (default: white marble + painted walls). */
-export function dressRoomShell(group: THREE.Group, style?: RoomStyle, onTextureLoad: () => void = () => undefined): void {
+/** T-043: accent material for the wall behind the wet zone, per style. */
+const ACCENT_WALL: Record<StylePreset, keyof typeof SURFACE_TEXTURES> = {
+  "minimalist-modern": "microcement",
+  "classic-luxury": "tile",
+  "japanese-zen": "hinoki",
+  "japanese-brutalism": "granite",
+  japandi: "oak",
+  scandinavian: "tile",
+  "industrial-loft": "concrete",
+  coastal: "white-oak",
+  "dark-luxury": "granite",
+};
+
+/** Floor and wall surfaces from the style preset (default: white marble, or dark granite
+ *  for a dark palette, + painted walls). With a style and a wet fixture position
+ *  (`accentNear`, plan x/z), the wall nearest it gets the style's accent material. */
+export function dressRoomShell(group: THREE.Group, style?: RoomStyle, onTextureLoad: () => void = () => undefined, accentNear?: { x: number; z: number }): void {
   const preset = style?.preset ? STYLES[style.preset] : undefined;
-  const floor = preset?.floor ?? "marble";
+  const floor = preset?.floor ?? (isDarkPalette(style?.palette ?? []) ? "granite" : "marble");
   const wall = preset?.wall ?? "paint";
   const marble = floor === "marble" ? marbleFloorTexture() : null;
   const paint = wall === "paint" ? wallTexture() : null;
-  const wallColor = wallHex(style);
+  // A preset owns the room materials, paint colour included.
+  const wallColor = wallHex(preset ? { palette: preset.palette } : style);
+  const accent = style?.preset ? ACCENT_WALL[style.preset] : isDarkPalette(style?.palette ?? []) ? "granite" : undefined;
+  const walls = group.children.filter((c) => c.name.startsWith("room/wall-"));
+  const accentWall = accent && accentNear
+    ? walls.reduce<THREE.Object3D | undefined>((best, w) => (!best || Math.hypot(w.position.x - accentNear.x, w.position.z - accentNear.z) < Math.hypot(best.position.x - accentNear.x, best.position.z - accentNear.z) ? w : best), undefined)
+    : undefined;
   for (const child of group.children) {
     if (!(child instanceof THREE.Mesh)) continue;
     const material = child.material as THREE.MeshPhysicalMaterial;
     const box = (child.geometry as THREE.BoxGeometry).parameters;
-    if (child.name === "room/floor" && floor !== "marble") {
+    if (child === accentWall && accent) {
+      applySurface(material, accent, box.width, box.height, onTextureLoad);
+    } else if (child.name === "room/floor" && floor !== "marble") {
       applySurface(material, floor, box.width, box.depth, onTextureLoad);
     } else if (child.name.startsWith("room/wall-") && wall !== "paint") {
       applySurface(material, wall, box.width, box.height, onTextureLoad);
@@ -376,23 +410,37 @@ export function buildArchitecture(spec: SceneSpec): THREE.Group {
 const COUNTER = new THREE.MeshPhysicalMaterial({ color: "#f2f0eb", roughness: 0.22, clearcoat: 0.6, clearcoatRoughness: 0.2 });
 const COUNTER_THICKNESS_MM = 40;
 const COUNTER_MARGIN_MM = 60;
+const CABINET = new THREE.MeshStandardMaterial({ color: "#b99b78", roughness: 0.6 });
+const CABINET_INSET_MM = 30;
+const CABINET_PANEL_MM = 18;
+const PLINTH_MM = 90;
+const TRAP = new THREE.MeshStandardMaterial({ color: "#c9d1d4", metalness: 0.9, roughness: 0.25 });
+const TRAP_RADIUS_MM = 18;
+const TRAP_DROP_MM = 260;
+
+const isWallMountBasin = (part: PartSpec): boolean => /wall-(mount|hung)/.test((part.productName ?? "").toLowerCase());
 
 /**
- * Presentation-only counter slabs under standalone deck basins (undercounter / vessel):
- * the catalog says their support is not included, and without one they would float at
- * COUNTER_HEIGHT_MM. Never a KOHLER product, never in the BOM. Wall-mount basins hang on
- * their own; deck faucets sit on their basin's deck/slab (T-028). One slab per placed
- * basin (parts grouped by model).
+ * Presentation-only supports for standalone basins (T-027a, T-034), never a KOHLER product
+ * and never in the BOM:
+ * - undercounter / vessel basins: a counter slab at COUNTER_HEIGHT_MM standing on a base
+ *   cabinet down to the floor (the catalog says their support is not included, and a bare
+ *   slab looked like it floated);
+ * - wall-mount basins: a chrome bottle trap and waste pipe into the wall under the bowl.
+ * Deck faucets sit on their basin's deck/slab (T-028). One support per placed basin
+ * (parts grouped by model).
  */
 export function buildSupports(spec: SceneSpec): THREE.Group {
   const group = new THREE.Group();
   group.name = "supports";
   const byModel = new Map<string, PartSpec[]>();
+  const wallHung = new Map<string, PartSpec[]>();
   for (const part of spec.parts) {
     if (part.fixtureClass !== "basin") continue;
-    if (part.fixtureClass === "basin" && (part.productName ?? "").toLowerCase().includes("wall-mount")) continue;
-    byModel.set(part.modelId, [...(byModel.get(part.modelId) ?? []), part]);
+    const target = isWallMountBasin(part) ? wallHung : byModel;
+    target.set(part.modelId, [...(target.get(part.modelId) ?? []), part]);
   }
+  for (const [modelId, parts] of wallHung) group.add(wasteTrap(modelId, parts));
   for (const [modelId, parts] of byModel) {
     // Union of the parts in the first part's wall frame (a along the wall, n into the room).
     const origin = parts[0];
@@ -435,6 +483,75 @@ export function buildSupports(spec: SceneSpec): THREE.Group {
     mesh.castShadow = true;
     mesh.receiveShadow = true;
     group.add(mesh);
+
+    // Base cabinet under the slab: inset at the sides and front, back against the wall,
+    // on a recessed plinth, so the counter visibly stands on the floor.
+    const cabinet = new THREE.Group();
+    cabinet.name = `support-cabinet/${modelId}`;
+    // Open-topped carcass (panels, not a solid block) so an undercounter bowl hangs
+    // inside it instead of being swallowed.
+    const bodyW = w - CABINET_INSET_MM * 2;
+    const bodyD = d - CABINET_INSET_MM;
+    const bodyH = COUNTER_HEIGHT_MM - COUNTER_THICKNESS_MM - PLINTH_MM;
+    const zc = -CABINET_INSET_MM / 2; // body centre, back flush with the slab back
+    const t = CABINET_PANEL_MM;
+    const panel = (pw: number, ph: number, pd: number, x: number, y: number, z: number): THREE.Mesh => {
+      const m = new THREE.Mesh(new THREE.BoxGeometry(pw, ph, pd), CABINET);
+      m.position.set(x, y, z);
+      return m;
+    };
+    const yMid = PLINTH_MM + bodyH / 2;
+    const panels = [
+      panel(t, bodyH, bodyD, -bodyW / 2 + t / 2, yMid, zc), // left side
+      panel(t, bodyH, bodyD, bodyW / 2 - t / 2, yMid, zc), // right side
+      panel(bodyW, bodyH, t, 0, yMid, zc + bodyD / 2 - t / 2), // front
+      panel(bodyW, bodyH, t, 0, yMid, zc - bodyD / 2 + t / 2), // back
+      panel(bodyW, t, bodyD, 0, PLINTH_MM + t / 2, zc), // bottom
+      panel(bodyW - 40, PLINTH_MM, bodyD - 60, 0, PLINTH_MM / 2, zc - 30), // recessed plinth
+    ];
+    for (const m of panels) {
+      m.castShadow = true;
+      m.receiveShadow = true;
+      cabinet.add(m);
+    }
+    // Shape y = -local z, so the slab's back (wall side) is local -z → the body shifts back.
+    cabinet.position.set(mesh.position.x, 0, mesh.position.z);
+    cabinet.rotation.y = rot;
+    group.add(cabinet);
   }
   return group;
+}
+
+/** Bottle trap under a wall-mount bowl: a short drop from the bowl's underside, then a
+ *  waste pipe back into the wall face. */
+function wasteTrap(modelId: string, parts: PartSpec[]): THREE.Group {
+  const origin = parts[0];
+  const rot = origin.rotationY;
+  const inward = { x: Math.sin(rot), z: Math.cos(rot) };
+  const halfH = (p: PartSpec): number => (p.shape.shape === "box" ? p.shape.sizeMm.h : p.shape.hMm) / 2;
+  const halfD = (p: PartSpec): number => (p.shape.shape === "box" ? p.shape.sizeMm.d : p.shape.radiusMm * 2) / 2;
+  const bowlBottom = Math.min(...parts.map((p) => p.positionMm.y - halfH(p)));
+  const cx = parts.reduce((t, p) => t + p.positionMm.x, 0) / parts.length;
+  const cz = parts.reduce((t, p) => t + p.positionMm.z, 0) / parts.length;
+  // Distance from the fixture centre back to the wall face along -inward.
+  const back = Math.max(...parts.map((p) => {
+    const n = (p.positionMm.x - cx) * inward.x + (p.positionMm.z - cz) * inward.z;
+    return halfD(p) - n;
+  }));
+  const reach = back * 0.5; // trap sits halfway between the wall and the bowl centre
+  const trap = new THREE.Group();
+  trap.name = `support-trap/${modelId}`;
+  const drop = new THREE.Mesh(new THREE.CylinderGeometry(TRAP_RADIUS_MM, TRAP_RADIUS_MM, TRAP_DROP_MM, 20), TRAP);
+  drop.position.set(0, bowlBottom - TRAP_DROP_MM / 2, -reach);
+  const pipeLength = back - reach;
+  const pipe = new THREE.Mesh(new THREE.CylinderGeometry(TRAP_RADIUS_MM * 0.8, TRAP_RADIUS_MM * 0.8, pipeLength, 16), TRAP);
+  pipe.rotation.x = Math.PI / 2;
+  pipe.position.set(0, bowlBottom - TRAP_DROP_MM + TRAP_RADIUS_MM, -reach - pipeLength / 2);
+  for (const m of [drop, pipe]) {
+    m.castShadow = true;
+    trap.add(m);
+  }
+  trap.position.set(cx, 0, cz);
+  trap.rotation.y = rot;
+  return trap;
 }

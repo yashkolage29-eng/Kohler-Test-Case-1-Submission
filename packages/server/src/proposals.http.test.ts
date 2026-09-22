@@ -113,6 +113,8 @@ describe("decor HTTP route", () => {
     expect((await post({ request: "decor", text: "calm", fixtures: Array.from({ length: 21 }, () => fixtures[0]) })).status).toBe(400);
     expect((await post({ request: "decor", text: "calm", fixtures: [{ fixtureClass: "vanity", modelId: 7 }] })).status).toBe(400);
     expect((await post({ request: "decor", text: "calm", fixtures: [{ ...fixtures[0], price: 1 }] })).status).toBe(400);
+    for (const targetItems of [5, 25, 10.5, "12"]) expect((await post({ request: "decor", text: "calm", fixtures, targetItems })).status).toBe(400);
+    expect((await post({ request: "decor", text: "calm", fixtures, targetItems: 16 })).status).toBe(200);
   });
   it("answers the offline twin with fallback posture (empty text allowed)", async () => {
     for (const text of ["calm", ""]) {

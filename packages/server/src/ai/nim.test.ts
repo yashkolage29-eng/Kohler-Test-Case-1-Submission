@@ -16,6 +16,70 @@ function opts(fetchImpl: typeof fetch, extra: Partial<NimClientOptions> = {}): N
   return { nimApiKey: "test", nimBaseUrl: "https://example.test", nimModel: "test", nimTimeoutMs: 1000, fetchImpl, ...extra };
 }
 
+describe("OpenRouter provider (T-044)", () => {
+  const openRouter = (fetchImpl: typeof fetch) => opts(fetchImpl, { nimBaseUrl: "https://openrouter.ai/api/v1", nimModel: "inclusionai/ling-3.0-flash-vl:free" });
+
+  it("sends OpenRouter's reasoning switch instead of NVIDIA's template flag", async () => {
+    const fetchImpl = okFetch();
+    await nimRequest(openRouter(fetchImpl as unknown as typeof fetch), "x", "s", 10);
+    const body = JSON.parse(String(fetchImpl.mock.calls[0]![1]!.body));
+    expect(fetchImpl.mock.calls[0]![0]).toBe("https://openrouter.ai/api/v1/chat/completions");
+    expect(body.reasoning).toEqual({ effort: "none" });
+    expect(body.chat_template_kwargs).toBeUndefined();
+  });
+
+  it("stays under OpenRouter's 20 RPM free limit: 6 décor + 12 general per minute", async () => {
+    const fetchImpl = okFetch();
+    const o = openRouter(fetchImpl as unknown as typeof fetch);
+    const decor = await Promise.all(Array.from({ length: 8 }, () => nimRequest(o, "x", "s", 10, "decor")));
+    const general = await Promise.all(Array.from({ length: 14 }, () => nimRequest(o, "x", "s", 10)));
+    expect(decor.filter((r) => r.ok)).toHaveLength(6);
+    expect(general.filter((r) => r.ok)).toHaveLength(12);
+    expect(fetchImpl).toHaveBeenCalledTimes(18);
+  });
+
+  it("NVIDIA keeps its template flag", async () => {
+    const fetchImpl = okFetch();
+    await nimRequest(opts(fetchImpl as unknown as typeof fetch), "x", "s", 10);
+    const body = JSON.parse(String(fetchImpl.mock.calls[0]![1]!.body));
+    expect(body.chat_template_kwargs).toEqual({ enable_thinking: false });
+    expect(body.reasoning).toBeUndefined();
+  });
+});
+
+describe("free-model fallback chain (T-044)", () => {
+  const chain = (fetchImpl: typeof fetch) => opts(fetchImpl, { nimBaseUrl: "https://openrouter.ai/api/v1", nimModel: "a:free, b:free ,c:free" });
+  const statusFor = (byModel: Record<string, number>) => vi.fn(async (_url: unknown, init?: RequestInit) => {
+    const model = JSON.parse(String(init!.body)).model as string;
+    const status = byModel[model] ?? 200;
+    return status === 200 ? new Response(JSON.stringify({ choices: [{ message: { content: `from ${model}` } }] })) : new Response("{}", { status });
+  });
+
+  it("an upstream 429 moves to the next model; the first answer wins", async () => {
+    const fetchImpl = statusFor({ "a:free": 429 });
+    expect(await nimRequest(chain(fetchImpl as unknown as typeof fetch), "x", "s", 10)).toEqual({ ok: true, content: "from b:free" });
+    expect(fetchImpl.mock.calls.map((c) => JSON.parse(String(c[1]!.body)).model)).toEqual(["a:free", "b:free"]);
+  });
+
+  it("other failures stop the chain; all three 429s fall back", async () => {
+    const f500 = statusFor({ "a:free": 500 });
+    expect(await nimRequest(chain(f500 as unknown as typeof fetch), "x", "s", 10)).toEqual({ ok: false, reason: "provider-upstream" });
+    expect(f500).toHaveBeenCalledTimes(1);
+    const all = statusFor({ "a:free": 429, "b:free": 429, "c:free": 429 });
+    expect(await nimRequest(chain(all as unknown as typeof fetch), "x", "s", 10)).toEqual({ ok: false, reason: "provider-rate-limit" });
+    expect(all).toHaveBeenCalledTimes(3);
+  });
+
+  it("every attempt counts toward the per-minute pool", async () => {
+    const fetchImpl = statusFor({ "a:free": 429, "b:free": 429 });
+    const o = chain(fetchImpl as unknown as typeof fetch);
+    for (let i = 0; i < 4; i++) await nimRequest(o, "x", "s", 10); // 3 attempts each until the pool of 12 runs out
+    expect(fetchImpl).toHaveBeenCalledTimes(12);
+    expect(await nimRequest(o, "x", "s", 10)).toEqual({ ok: false, reason: "provider-rate-limit" });
+    expect(fetchImpl).toHaveBeenCalledTimes(12);
+  });
+});
+
 describe("NIM request pools (hard 40 RPM provider limit)", () => {
   it("pool sizes sum below 40/min", () => {
     expect(NIM_DECOR_MAX_PER_WINDOW).toBe(10);

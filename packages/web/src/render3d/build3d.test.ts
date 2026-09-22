@@ -66,8 +66,9 @@ describe("buildPlacedDecor (AI décor meshes)", () => {
     expect(lights.length).toBeLessThanOrEqual(3);
   });
 
-  it("covers every décor type, sits meshes inside the item's box and caps lights at 3", () => {
-    const types: PlacedDecor["type"][] = ["pendant", "sconce", "backlit-mirror", "mirror", "art", "plant", "small-plant", "rug", "towel", "vase", "candles", "shelf", "stool"];
+  it("covers every décor type, sits meshes inside the item's box and caps lights at 4", () => {
+    const types: PlacedDecor["type"][] = ["pendant", "sconce", "backlit-mirror", "mirror", "art", "plant", "small-plant", "rug", "towel", "vase", "candles", "shelf", "stool",
+      "towel-ladder", "cabinet", "side-table", "floor-mirror", "bath-mat", "tub-tray", "niche-shelf", "laundry-basket", "floor-lamp", "led-strip", "sculpture"];
     const items: PlacedDecor[] = types.map((type, i) => ({
       id: `decor-${i}-${type}`, type, mount: "floor", positionMm: { x: 0, y: 500, z: 0 }, rotationY: 0,
       sizeMm: { w: 400, h: 1000, d: 300 }, color: "#8b5e3c", metal: "chrome",
@@ -77,7 +78,7 @@ describe("buildPlacedDecor (AI décor meshes)", () => {
     expect(root.children).toHaveLength(types.length);
     let lights = 0;
     root.traverse((child) => { if (child instanceof THREE.PointLight) lights++; });
-    expect(lights).toBe(3);
+    expect(lights).toBe(4);
     for (const group of root.children) {
       const box = new THREE.Box3().setFromObject(group);
       expect(box.isEmpty()).toBe(false);

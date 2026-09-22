@@ -145,7 +145,7 @@ it("loads every existing authored entry with verified evidence, excluding geomet
 it("loads authored SKUs with verified evidence alongside additions", () => {
      const { state, report } = loadCatalog();
      expect(state.skus.some((sku) => sku.model_id === "K-18655IN-ND-CP")).toBe(true);
-     expect(report.loadedCount + report.quarantinedCount).toBe(88);
+     expect(report.loadedCount + report.quarantinedCount).toBe(99);
      expect(report.quarantinedCount).toBe(9);
      for (const sku of state.skus) {
        const evidence = sku.evidence;
@@ -179,7 +179,7 @@ it("covers six classes and documented low-flow and rainhead features without inv
        ["accessory", "basin", "faucet", "shower", "toilet", "tub", "vanity"].map((cls) => [
          cls, state.skus.filter((sku) => sku.fixture_class === cls).length,
        ]),
-     )).toEqual({ accessory: 9, basin: 6, faucet: 18, shower: 16, toilet: 14, tub: 9, vanity: 7 });
+     )).toEqual({ accessory: 9, basin: 9, faucet: 22, shower: 20, toilet: 14, tub: 9, vanity: 7 });
      expect(state.skus.find((sku) => sku.model_id === "K-28780IN-0")).toMatchObject({
        feature_tags: ["dual_flush", "wall_mount"],
        water: { flushLiters: 4, flushLightLiters: 2, dualFlush: true },

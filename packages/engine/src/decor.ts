@@ -9,13 +9,16 @@ import { buildWallStrips, rangesIntersectMm, stripInwardNormal, stripPoint } fro
 import { roundMm } from "./geometry/num.js";
 import { STYLE_PRESETS, STYLES, detectStylePreset, type StylePreset } from "./styles.js";
 
-export const DECOR_TYPES = ["pendant", "sconce", "backlit-mirror", "mirror", "art", "plant", "small-plant", "rug", "towel", "vase", "candles", "shelf", "stool", "chandelier", "lantern", "bench", "basket", "bowl"] as const;
+export const DECOR_TYPES = ["pendant", "sconce", "backlit-mirror", "mirror", "art", "plant", "small-plant", "rug", "towel", "vase", "candles", "shelf", "stool", "chandelier", "lantern", "bench", "basket", "bowl",
+  // T-043 room-filling pieces.
+  "towel-ladder", "cabinet", "side-table", "floor-mirror", "bath-mat", "tub-tray", "niche-shelf", "laundry-basket", "floor-lamp", "led-strip", "sculpture"] as const;
 export type DecorType = (typeof DECOR_TYPES)[number];
-export const LIGHT_DECOR_TYPES: readonly DecorType[] = ["pendant", "sconce", "backlit-mirror", "chandelier", "lantern"];
-export const DECOR_ANCHORS = ["above-vanity", "above-basin", "beside-toilet", "beside-shower", "on-vanity", "corner", "free-wall", "door-side", "center-floor", "ceiling-center"] as const;
+export const LIGHT_DECOR_TYPES: readonly DecorType[] = ["pendant", "sconce", "backlit-mirror", "chandelier", "lantern", "floor-lamp", "led-strip"];
+export const DECOR_ANCHORS = ["above-vanity", "above-basin", "beside-toilet", "beside-shower", "on-vanity", "corner", "free-wall", "door-side", "center-floor", "ceiling-center", "beside-tub"] as const;
 export type DecorAnchor = (typeof DECOR_ANCHORS)[number];
-export const MAX_DECOR_ITEMS = 14;
-export const MAX_DECOR_LIGHTS = 3;
+export const MAX_DECOR_ITEMS = 24;
+/** Parse-level light cap; placement allows 3 in a small room and 4 in a large one (decorCaps). */
+export const MAX_DECOR_LIGHTS = 4;
 
 export interface DecorStyle {
   /** 1–4 "#rrggbb" colours. */
@@ -137,6 +140,17 @@ const BASE_DIMS: Record<DecorType, Dims> = {
   bench: { w: 900, h: 450, d: 350 },
   basket: { w: 400, h: 350, d: 300 },
   bowl: { w: 250, h: 90, d: 250 },
+  "towel-ladder": { w: 500, h: 1600, d: 300 },
+  cabinet: { w: 500, h: 1500, d: 350 },
+  "side-table": { w: 400, h: 500, d: 400 },
+  "floor-mirror": { w: 700, h: 1800, d: 60 },
+  "bath-mat": { w: 800, h: 10, d: 500 },
+  "tub-tray": { w: 700, h: 50, d: 220 },
+  "niche-shelf": { w: 600, h: 350, d: 120 },
+  "laundry-basket": { w: 400, h: 600, d: 400 },
+  "floor-lamp": { w: 350, h: 1600, d: 350 },
+  "led-strip": { w: 1200, h: 40, d: 40 },
+  sculpture: { w: 350, h: 700, d: 350 },
 };
 const SIZE_SCALE: Record<DecorItemProposal["size"], number> = { s: 0.75, m: 1, l: 1.25 };
 
@@ -159,7 +173,22 @@ const MOUNT_BY_TYPE: Record<DecorType, Mount> = {
   bench: "floor",
   basket: "floor",
   bowl: "surface",
+  "towel-ladder": "floor",
+  cabinet: "floor",
+  "side-table": "floor",
+  "floor-mirror": "floor",
+  "bath-mat": "floor",
+  "tub-tray": "surface",
+  "niche-shelf": "wall",
+  "laundry-basket": "floor",
+  "floor-lamp": "floor",
+  "led-strip": "wall",
+  sculpture: "floor",
 };
+/** Floor pieces that stand against a wall rather than in the open. */
+const WALL_BACKED: readonly DecorType[] = ["towel-ladder", "cabinet", "floor-mirror", "laundry-basket"];
+/** Flat floor textiles: may lie in a fixture's front clearance, never under a fixture. */
+const FLOOR_TEXTILES: readonly DecorType[] = ["rug", "bath-mat"];
 /** Default mount-centre heights (mm) for wall items. */
 const WALL_CENTRE_Y: Partial<Record<DecorType, number>> = {
   mirror: 1500,
@@ -168,6 +197,8 @@ const WALL_CENTRE_Y: Partial<Record<DecorType, number>> = {
   sconce: 1700,
   shelf: 1300,
   towel: 1000,
+  "niche-shelf": 1300,
+  "led-strip": 2250,
 };
 /** Assumed fixture top heights (mm); RenderGeometry carries plan AABBs only. */
 const FIXTURE_HEIGHT: Record<FixtureClass, number> = {
@@ -189,7 +220,7 @@ const WINDOW_BAND_MM: [number, number] = [900, 2100];
 const DOOR_HEIGHT_MM = 2100;
 const GLASS_HEX = "#c9d6dc";
 const LIGHT_HEX: Record<DecorStyle["lightTemp"], string> = { warm: "#ffcf9a", neutral: "#fff4e5", cool: "#e6f0ff" };
-const LIGHT_INTENSITY: Partial<Record<DecorType, number>> = { pendant: 1.2, sconce: 0.8, "backlit-mirror": 1, chandelier: 1.4, lantern: 0.6 };
+const LIGHT_INTENSITY: Partial<Record<DecorType, number>> = { pendant: 1.2, sconce: 0.8, "backlit-mirror": 1, chandelier: 1.4, lantern: 0.6, "floor-lamp": 0.7, "led-strip": 0.6 };
 
 interface Fx { cls: FixtureClass; aabb: AABB; strip?: WallStrip; height: number }
 interface WallPlaced { type: DecorType; stripId: string; c: number; w: number; plan: AABB; y0: number; y1: number }
@@ -328,6 +359,8 @@ function anchorFixtures(ctx: Ctx, anchor: DecorAnchor): Fx[] {
       return fixturesFor(ctx, ["toilet"]);
     case "beside-shower":
       return fixturesFor(ctx, ["shower", "tub"]);
+    case "beside-tub":
+      return fixturesFor(ctx, ["tub", "shower"]);
     default:
       return [];
   }
@@ -368,8 +401,8 @@ function besideSpots(ctx: Ctx, strip: WallStrip, a0: number, a1: number, dims: D
 function floorSpots(ctx: Ctx, type: DecorType, anchor: DecorAnchor, dims: Dims): Spot[] {
   const fx = anchorFixtures(ctx, anchor).filter((f): f is Fx & { strip: WallStrip } => f.strip !== undefined);
   const first: Spot[] = [];
-  if (type === "rug" && ["above-vanity", "above-basin", "on-vanity"].includes(anchor)) {
-    // In front of the vanity/basin (rugs may lie in front clearance, never under a fixture).
+  if (FLOOR_TEXTILES.includes(type) && ["above-vanity", "above-basin", "on-vanity", "beside-tub", "beside-shower"].includes(anchor)) {
+    // In front of the fixture (textiles may lie in front clearance, never under a fixture).
     for (const f of fx) {
       const [a0, a1] = alongRange(f.strip, f.aabb);
       for (const shift of [0, -1, 1, -2, 2]) {
@@ -380,18 +413,53 @@ function floorSpots(ctx: Ctx, type: DecorType, anchor: DecorAnchor, dims: Dims):
   } else {
     for (const f of fx) first.push(...besideSpots(ctx, f.strip, ...alongRange(f.strip, f.aabb), dims));
   }
+  // T-043: fixtures standing away from the walls (a freestanding tub): spots at both ends
+  // of the long axis, and textiles along its long sides.
+  for (const f of anchorFixtures(ctx, anchor).filter((x) => x.strip === undefined)) {
+    const b = f.aabb;
+    const c = centre(b);
+    const alongX = b.max.x - b.min.x >= b.max.y - b.min.y;
+    if (FLOOR_TEXTILES.includes(type)) {
+      for (const side of [1, -1]) {
+        first.push(alongX
+          ? { plan: box(c.x - dims.w / 2, side > 0 ? b.max.y + GAP_MM : b.min.y - GAP_MM - dims.d, c.x + dims.w / 2, side > 0 ? b.max.y + GAP_MM + dims.d : b.min.y - GAP_MM), rot: 0, y: dims.h / 2 }
+          : { plan: box(side > 0 ? b.max.x + GAP_MM : b.min.x - GAP_MM - dims.d, c.y - dims.w / 2, side > 0 ? b.max.x + GAP_MM + dims.d : b.min.x - GAP_MM, c.y + dims.w / 2), rot: Math.PI / 2, y: dims.h / 2 });
+      }
+    } else {
+      for (const side of [1, -1]) {
+        first.push(alongX
+          ? { plan: box(side > 0 ? b.max.x + GAP_MM : b.min.x - GAP_MM - dims.w, c.y - dims.d / 2, side > 0 ? b.max.x + GAP_MM + dims.w : b.min.x - GAP_MM, c.y + dims.d / 2), rot: 0, y: dims.h / 2 }
+          : { plan: box(c.x - dims.w / 2, side > 0 ? b.max.y + GAP_MM : b.min.y - GAP_MM - dims.d, c.x + dims.w / 2, side > 0 ? b.max.y + GAP_MM + dims.d : b.min.y - GAP_MM), rot: 0, y: dims.h / 2 });
+      }
+    }
+  }
   if (anchor === "door-side") {
     for (const d of ctx.doors) first.push(...besideSpots(ctx, d.strip, d.a0, d.a1, dims));
   }
   const grid = gridSpots(ctx, dims, dims.h / 2);
   const corners = cornerSpots(ctx, dims);
+  if (WALL_BACKED.includes(type)) return [...first, ...wallBackedSpots(ctx, dims), ...corners];
   return type === "rug" || anchor === "center-floor" || anchor === "ceiling-center"
     ? [...first, ...grid, ...corners]
     : [...first, ...corners, ...grid];
 }
+/** T-043: floor spots with the back against a wall, longest walls first, centre outwards. */
+function wallBackedSpots(ctx: Ctx, dims: Dims): Spot[] {
+  const off = ctx.halfT + GAP_MM;
+  const out: Spot[] = [];
+  for (const strip of [...ctx.strips].sort((p, q) => q.usableLengthMm - p.usableLengthMm || (p.id < q.id ? -1 : 1))) {
+    const mid = strip.usableLengthMm / 2;
+    for (let k = 0; k * GRID_STEP_MM <= mid; k++) {
+      for (const c of k === 0 ? [mid] : [mid + k * GRID_STEP_MM, mid - k * GRID_STEP_MM]) {
+        out.push({ plan: wallBox(strip, c, dims.w, off, dims.d), rot: inwardRotation(strip), y: dims.h / 2 });
+      }
+    }
+  }
+  return out;
+}
 function floorOk(ctx: Ctx, plan: AABB, type: DecorType): boolean {
   if (!aabbInsidePolygonMm(expand(plan, ctx.halfT), ctx.polygon)) return false;
-  const blockers = [...ctx.fixtures.map((f) => f.aabb), ...ctx.openingZones, ...ctx.floor, ...(type === "rug" ? [] : ctx.clearances)];
+  const blockers = [...ctx.fixtures.map((f) => f.aabb), ...ctx.openingZones, ...ctx.floor, ...(FLOOR_TEXTILES.includes(type) ? [] : ctx.clearances)];
   return !blockers.some((b) => aabbIntersectsMm(plan, b));
 }
 
@@ -480,6 +548,22 @@ function surfaceSpots(ctx: Ctx, anchor: DecorAnchor, dims: Dims): { spot: Spot; 
     }));
   });
 }
+/** T-043: a tray across the middle of a tub, resting on its rim. */
+function tubTraySpots(ctx: Ctx, dims: Dims): { spot: Spot; host: Fx }[] {
+  return fixturesFor(ctx, ["tub"]).flatMap((host) => {
+    if (!host.strip) {
+      // Freestanding away from the walls: across the tub's short axis.
+      const c = centre(host.aabb);
+      const alongX = host.aabb.max.x - host.aabb.min.x >= host.aabb.max.y - host.aabb.min.y;
+      const plan = alongX ? box(c.x - dims.d / 2, c.y - dims.w / 2, c.x + dims.d / 2, c.y + dims.w / 2) : box(c.x - dims.w / 2, c.y - dims.d / 2, c.x + dims.w / 2, c.y + dims.d / 2);
+      return [{ spot: { plan, rot: alongX ? Math.PI / 2 : 0, y: host.height + dims.h / 2 }, host }];
+    }
+    const [a0, a1] = alongRange(host.strip, host.aabb);
+    const depth = depthOf(host.strip, host.aabb);
+    const plan = wallBox(host.strip, (a0 + a1) / 2, dims.d, ctx.halfT + (depth - dims.w) / 2, dims.w);
+    return [{ spot: { plan, rot: inwardRotation(host.strip) + Math.PI / 2, y: host.height + dims.h / 2 }, host }];
+  });
+}
 function surfaceOk(ctx: Ctx, plan: AABB, host: Fx): boolean {
   if (!contains(host.aabb, plan)) return false;
   if (ctx.fixtures.some((f) => f !== host && aabbIntersectsMm(plan, f.aabb))) return false;
@@ -489,7 +573,49 @@ function surfaceOk(ctx: Ctx, plan: AABB, host: Fx): boolean {
 function scaledDims(type: DecorType, size: DecorItemProposal["size"]): Dims {
   const k = SIZE_SCALE[size];
   const b = BASE_DIMS[type];
-  return { w: roundMm(b.w * k), h: type === "rug" ? b.h : roundMm(b.h * k), d: roundMm(b.d * k) };
+  return { w: roundMm(b.w * k), h: FLOOR_TEXTILES.includes(type) ? b.h : roundMm(b.h * k), d: roundMm(b.d * k) };
+}
+
+/** T-043: room-scaled décor. Floor area up to 5 m² keeps the proposal as is; each further
+ *  0.9 m² adds one placed filler piece (at most MAX_DECOR_ITEMS in all), and rooms over
+ *  8 m² may light a fourth lamp. */
+export function decorCaps(geometry: RenderGeometry): { extraItems: number; lights: number } {
+  let area = 0;
+  const vs = geometry.polygon.vertices;
+  for (let i = 0; i < vs.length; i++) area += vs[i].x * vs[(i + 1) % vs.length].y - vs[(i + 1) % vs.length].x * vs[i].y;
+  const m2 = Math.abs(area) / 2 / 1e6;
+  return { extraItems: m2 > 5 ? Math.floor((m2 - 5) / 0.9) : 0, lights: m2 > 8 ? 4 : 3 };
+}
+
+/** Generic filler pieces for a custom (no preset) style; presets carry their own. */
+function genericFillers(style: DecorStyle): DecorItemProposal[] {
+  const luxe = style.metal === "brass";
+  return [
+    { type: "rug", anchor: "center-floor", size: "l" },
+    { type: "art", anchor: "free-wall", size: "l" },
+    { type: "floor-lamp", anchor: "corner", size: "m" },
+    { type: "bath-mat", anchor: "beside-tub", size: "m" },
+    { type: luxe ? "floor-mirror" : "towel-ladder", anchor: "free-wall", size: "m" },
+    { type: "side-table", anchor: "beside-tub", size: "m" },
+    { type: "plant", anchor: "corner", size: "l" },
+    { type: "art", anchor: "free-wall", size: "m" },
+    { type: "cabinet", anchor: "free-wall", size: "m" },
+    { type: "tub-tray", anchor: "beside-tub", size: "m" },
+    { type: "bench", anchor: "center-floor", size: "m" },
+    { type: "laundry-basket", anchor: "door-side", size: "m" },
+    { type: "niche-shelf", anchor: "free-wall", size: "m" },
+    { type: "led-strip", anchor: "above-vanity", size: "m" },
+    { type: "sculpture", anchor: "corner", size: "m" },
+  ];
+}
+
+/** The proposal's items, then its style's fillers; `fillerQuota` fillers may be placed
+ *  (fillers with no legal spot do not use up the quota). Deterministic. */
+function withRoomFill(proposal: DecorProposal, geometry: RenderGeometry): { items: DecorItemProposal[]; firstFiller: number; fillerQuota: number } {
+  const quota = Math.min(decorCaps(geometry).extraItems, MAX_DECOR_ITEMS - proposal.items.length);
+  if (quota <= 0) return { items: proposal.items, firstFiller: proposal.items.length, fillerQuota: 0 };
+  const fillers = proposal.style.preset ? STYLES[proposal.style.preset].fillers : genericFillers(proposal.style);
+  return { items: [...proposal.items, ...fillers], firstFiller: proposal.items.length, fillerQuota: quota };
 }
 
 /** Deterministic placement. Items with no legal spot are skipped. Fixtures are
@@ -497,14 +623,24 @@ function scaledDims(type: DecorType, size: DecorItemProposal["size"]): Dims {
 export function placeDecor(proposal: DecorProposal, geometry: RenderGeometry): PlacedDecor[] {
   const ctx = buildCtx(geometry);
   const out: PlacedDecor[] = [];
+  const maxLights = decorCaps(geometry).lights;
   let lights = 0;
-  proposal.items.forEach((item, index) => {
+  const { items, firstFiller, fillerQuota } = withRoomFill(proposal, geometry);
+  let fillersPlaced = 0;
+  items.forEach((item, index) => {
+    if (index >= firstFiller && fillersPlaced >= fillerQuota) return;
     const light = isLight(item.type);
-    if (light && lights >= MAX_DECOR_LIGHTS) return;
+    if (light && lights >= maxLights) return;
     const dims = scaledDims(item.type, item.size);
     let mount = MOUNT_BY_TYPE[item.type];
     let spot: Spot | undefined;
-    if (mount === "surface") {
+    if (item.type === "tub-tray") {
+      // Only ever on a tub rim; skipped when the plan has no tub.
+      const found = tubTraySpots(ctx, dims).find(({ spot: s, host }) => surfaceOk(ctx, s.plan, host));
+      if (!found) return;
+      spot = found.spot;
+      ctx.surface.push(spot.plan);
+    } else if (mount === "surface") {
       const found = ["on-vanity", "above-vanity", "above-basin"].includes(item.anchor)
         ? surfaceSpots(ctx, item.anchor, dims).find(({ spot: s, host }) => surfaceOk(ctx, s.plan, host))
         : undefined;
@@ -546,6 +682,7 @@ export function placeDecor(proposal: DecorProposal, geometry: RenderGeometry): P
       lights++;
     }
     out.push(placed);
+    if (index >= firstFiller) fillersPlaced++;
   });
   return out;
 }

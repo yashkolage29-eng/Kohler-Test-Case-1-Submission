@@ -38,6 +38,7 @@ export function buildRelaxationMenu(
       kind: path.kind,
       tradeoffDelta: path.tradeoffDelta,
       plan: result.plan,
+      input: path.input,
     };
     menu.push(relaxed);
   }

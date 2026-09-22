@@ -41,6 +41,8 @@ export function basinDeckMm(basin: PartSpec, parts: PartSpec[]): number {
 
 export interface DetailMaterials {
   ceramic: THREE.Material;
+  /** T-042: black vitreous china (KOHLER "Black Black" / "Honed Black"). */
+  darkCeramic: THREE.Material;
   metal: (part: PartSpec) => THREE.Material;
   wood: (part: PartSpec) => THREE.Material;
   counter: THREE.Material;
@@ -344,6 +346,11 @@ export function detailedPart(part: PartSpec, ctx: DetailContext): THREE.Object3D
     default: return null;
   }
   if (f.group.children.length === 0) return null;
+  if (part.finishId === "black_ceramic") {
+    f.group.traverse((child) => {
+      if (child instanceof THREE.Mesh && child.material === ctx.materials.ceramic) child.material = ctx.materials.darkCeramic;
+    });
+  }
   const outer = new THREE.Group();
   outer.add(f.group);
   // Guarantee the fit: curves (tubes, lathes) may overshoot a millimetre or two, so scale

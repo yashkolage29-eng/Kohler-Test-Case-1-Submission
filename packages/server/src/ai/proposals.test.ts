@@ -51,6 +51,38 @@ describe("proposal adapter tasks", () => {
       vi.useRealTimers();
     }
   });
+  it("photo scans wait 25 s (vision is slower), still inside the browser's 30 s", async () => {
+    vi.useFakeTimers();
+    try {
+      const fetchImpl: typeof fetch = (_url, init) => new Promise((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => reject(new Error("aborted")));
+      });
+      let settled = false;
+      const result = createAiAdapter({ nimApiKey: "test", nimVisionModel: "v", fetchImpl }).photoProposal(IMAGE, room).then((value) => { settled = true; return value; });
+      await vi.advanceTimersByTimeAsync(24999);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(result).resolves.toMatchObject({ value: null, reason: "provider-timeout" });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+  it("décor waits 25 s (a long answer that loads behind the finished plan)", async () => {
+    vi.useFakeTimers();
+    try {
+      const fetchImpl: typeof fetch = (_url, init) => new Promise((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => reject(new Error("aborted")));
+      });
+      let settled = false;
+      const result = createAiAdapter({ nimApiKey: "test", fetchImpl }).decor("warm", [{ fixtureClass: "toilet", modelId: "K-1" }]).then((value) => { settled = true; return value; });
+      await vi.advanceTimersByTimeAsync(24999);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(result).resolves.toMatchObject({ fallback: true, reason: "provider-timeout" });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
   it.each([NaN, Infinity, -1, 0, 120001])("rejects invalid timeout %s without contacting NIM", async (nimTimeoutMs) => {
     const fetchImpl = vi.fn();
     await expect(createAiAdapter({ nimApiKey: "test", nimTimeoutMs, fetchImpl }).proposeRoom("wider", room)).resolves.toMatchObject({ value: null, reason: "provider-config" });
@@ -95,6 +127,23 @@ describe("photo → openings proposal", () => {
     expect(content[1]).toEqual({ type: "image_url", image_url: { url: IMAGE } });
     expect(String(content[0]!.text)).toContain('"id":"wall-bottom","usableLengthMm":2400');
   });
+  it("accepts openings echoed in the room's own shape (nested swing, window without swing)", async () => {
+    // Exact shape the live vision model returned when it copied room.openings.
+    const echoed = { operations: [
+      { op: "opening", id: "door-1", kind: "door", wallId: "wall-bottom", alongOffsetMm: 0, spanMm: 700, swing: { side: "out", leafDimsMm: { w: 700, d: 25 } } },
+      { op: "opening", id: "window-1", kind: "window", wallId: "wall-top", alongOffsetMm: 600, spanMm: 900 },
+    ] };
+    let sent: { messages: Array<{ content: unknown }> } | undefined;
+    const ai = createAiAdapter({ ...nimEnv((body) => { sent = body as never; return `\n${JSON.stringify(echoed)}`; }), nimVisionModel: "v" });
+    await expect(ai.photoProposal(IMAGE, room)).resolves.toEqual({ value: { operations: [
+      { ...echoed.operations[0], swing: "out" },
+      { ...echoed.operations[1], swing: "in" },
+    ] }, fallback: false, reason: "" });
+    // Existing openings go to the model in the operation shape, so it has nothing nested to copy.
+    const text = String((sent!.messages[1]!.content as Array<Record<string, unknown>>)[0]!.text);
+    expect(text).toContain('"id":"door-1","kind":"door","wallId":"wall-bottom","alongOffsetMm":1500,"spanMm":600,"swing":"in"');
+    expect(text).not.toContain("leafDimsMm");
+  });
   it("rejects dimension ops, unknown walls and empty answers", async () => {
     const env = { nimVisionModel: "v" };
     await expect(createAiAdapter({ ...nimEnv(() => ({ operations: [door, { op: "dimension", field: "widthMm", value: 3000 }] })), ...env }).photoProposal(IMAGE, room)).resolves.toMatchObject({ value: null, reason: "provider-malformed-output" });
@@ -133,6 +182,21 @@ describe("decor proposal", () => {
     expect(fetchImpl).toHaveBeenCalledTimes(1);
     await ai.decor("warm japandi", [fixtures[0]!]);
     expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+  it("asks for a room-scaled item count and caches per count (T-043)", async () => {
+    const bodies: Array<{ messages: Array<{ content: string }> }> = [];
+    const fetchImpl = vi.fn(async (_url: unknown, init?: RequestInit) => { bodies.push(JSON.parse(String(init!.body))); return reply(proposal); });
+    const ai = createAiAdapter({ nimApiKey: "k", fetchImpl: fetchImpl as unknown as typeof fetch });
+    await ai.decor("warm japandi", fixtures, 16);
+    expect(bodies[0]!.messages[0]!.content).toContain("Aim for 16 items");
+    expect(bodies[0]!.messages[0]!.content).toContain("At most 24 items");
+    await ai.decor("warm japandi", fixtures);
+    expect(bodies[1]!.messages[0]!.content).toContain("Aim for 6-12 items");
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+  it("accepts JSON wrapped in markdown fences (free models often add them)", async () => {
+    const ai = createAiAdapter({ nimApiKey: "k", fetchImpl: async () => reply("```json\n" + JSON.stringify(proposal) + "\n```") });
+    await expect(ai.decor("fenced", fixtures)).resolves.toEqual({ value: proposal, fallback: false, reason: "" });
   });
   it("maps near-miss metal words (gold → brass) before strict parsing", async () => {
     const ai = createAiAdapter({ nimApiKey: "k", fetchImpl: async () => reply({ ...proposal, style: { ...proposal.style, metal: "Gold" } }) });

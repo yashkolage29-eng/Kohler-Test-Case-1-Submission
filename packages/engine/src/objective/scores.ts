@@ -3,10 +3,12 @@
 // no vote to any term (OPT §6, ADR-014).
 //
 // Anchoring per term (§7 — absolute/anchored where a defensible reference exists):
-// - u_cost: anchored on B_target (ideal) vs B_max (worst). At or below target → 1.0:
-//   the target is the IDEAL, savings below it are not penalized (the anchored form of
-//   OPT §6.1's "reward closeness to B_target").
-// - u_space: spare-floor fraction = (room area − Σ placed footprint area) / room area.
+// - u_cost: anchored on B_target vs B_max (worst, 0). Below target u_cost is linear
+//   between config.costCurve[priority].atZero and .atTarget (T-032: balanced/luxury pull
+//   spend toward B_target — the anchored form of OPT §6.1's "reward closeness to
+//   B_target"; value rewards savings; eco is flat), then falls linearly to 0 at B_max.
+// - u_space: spare-floor fraction = (room area − Σ placed footprint area) / room area;
+//   for airy/compact it is averaged with a product-size fit (T-032, see below).
 //   Inherently anchored on [0,1] (0 = min-fit, 1 = fully spare) — NO within-set min/max
 //   normalization is used, which §7 permits only where no external anchor exists, so
 //   scores are candidate-set-size independent (§18.5).
@@ -41,7 +43,7 @@ export const DEFAULT_SPACIOUSNESS: Spaciousness = "balanced";
 const clamp01 = (n: number): number => (n < 0 ? 0 : n > 1 ? 1 : n);
 
 /** Premium-feature tags for u_luxury (closed vocab, contracts/vocab). */
-const LUXURY_TAGS: readonly FeatureTag[] = [
+export const LUXURY_TAGS: readonly FeatureTag[] = [
   "smart",
   "bidet",
   "heated_seat",
@@ -96,6 +98,23 @@ export function resolveWeights(
   };
 }
 
+/** Classes whose size the spaciousness preference steers (deck faucets and wall
+ *  accessories take no floor). */
+const SIZED_CLASSES: ReadonlySet<FixtureClass> = new Set(["toilet", "basin", "vanity", "shower", "tub"]);
+
+/** Catalog min/max footprint area per sized class — catalog-anchored, set-size independent. */
+function footprintRangeByClass(catalog: CatalogState): Map<FixtureClass, { min: number; max: number }> {
+  const range = new Map<FixtureClass, { min: number; max: number }>();
+  for (const sku of catalog.skus) {
+    if (!SIZED_CLASSES.has(sku.fixture_class)) continue;
+    const area = sku.dim.w * sku.dim.d;
+    const r = range.get(sku.fixture_class);
+    if (r === undefined) range.set(sku.fixture_class, { min: area, max: area });
+    else range.set(sku.fixture_class, { min: Math.min(r.min, area), max: Math.max(r.max, area) });
+  }
+  return range;
+}
+
 /** Combined water draw of one SKU: flush liters for toilets, flow Lpm for the
  *  other wet classes (faucet, shower); dry classes contribute 0. */
 function waterValue(sku: SKU): number {
@@ -135,12 +154,18 @@ export function scoreCandidate(
   const worstWater = worstWaterByClass(catalog);
 
   // u_cost — anchored: ideal B_target, worst B_max (OPT §6.1).
+  // T-032: below target, priorities with a floor < 1 pull the spend toward B_target.
   const span = input.budget.bMax - input.budget.bTarget;
+  const curve = config.costCurve[input.priority ?? DEFAULT_PRIORITY];
+  // T-041: luxury peaks at B_max (the top of the range), the others at B_target.
+  const peak = curve.pivot === "max" ? input.budget.bMax : input.budget.bTarget;
   const uCost =
-    span > 0
-      ? clamp01(1 - (resolved.cost - input.budget.bTarget) / span)
-      : resolved.cost <= input.budget.bTarget
-        ? 1
+    resolved.cost <= peak
+      ? peak > 0
+        ? curve.atZero + (curve.atTarget - curve.atZero) * (resolved.cost / peak)
+        : curve.atTarget
+      : span > 0
+        ? clamp01(curve.atTarget * (1 - (resolved.cost - input.budget.bTarget) / span))
         : 0;
 
   // u_space — spare-floor fraction; physically anchored on [0,1] (see header).
@@ -149,7 +174,27 @@ export function scoreCandidate(
   for (const binding of candidate.bindings) {
     usedMm2 += binding.fixture.footprintMm.w * binding.fixture.footprintMm.d;
   }
-  const uSpace = roomAreaMm2 > 0 ? clamp01((roomAreaMm2 - usedMm2) / roomAreaMm2) : 0;
+  const spareFloor = roomAreaMm2 > 0 ? clamp01((roomAreaMm2 - usedMm2) / roomAreaMm2) : 0;
+  // T-032 product size preference: spare floor barely differs between SKU sets, so on its
+  // own spaciousness never moved the plan. Airy rewards the smallest product of each type,
+  // compact the roomier ones, each anchored on the catalog's min/max footprint per class.
+  const spaciousness = input.spaciousness ?? DEFAULT_SPACIOUSNESS;
+  let uSpace = spareFloor;
+  if (spaciousness !== "balanced") {
+    const range = footprintRangeByClass(catalog);
+    const ranks: number[] = [];
+    for (const binding of candidate.bindings) {
+      const r = range.get(binding.fixture.class);
+      if (r === undefined || r.max <= r.min) continue;
+      const area = binding.fixture.footprintMm.w * binding.fixture.footprintMm.d;
+      ranks.push(clamp01((area - r.min) / (r.max - r.min)));
+    }
+    if (ranks.length > 0) {
+      const meanRank = ranks.reduce((t, r) => t + r, 0) / ranks.length;
+      const sizeFit = spaciousness === "airy" ? 1 - meanRank : meanRank;
+      uSpace = (spareFloor + sizeFit) / 2;
+    }
+  }
 
   // u_water — combined draw vs eco-gold ideal and catalog-worst.
   let combined = 0;

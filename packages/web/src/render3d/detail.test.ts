@@ -103,3 +103,21 @@ describe("detailedPart", () => {
     expect(fingerprint(g1)).toBe(fingerprint(buildSceneGroup(buildSceneSpec(geometry, skus))));
   });
 });
+
+describe("black ceramic (T-042)", () => {
+  const materials = detailMaterials(finishHex, () => undefined);
+  const { state } = loadCatalog();
+  const meshMaterials = (id: string): Set<THREE.Material> => {
+    const sku = state.skus.find((s) => s.model_id === id)!;
+    const parts = skuParts(sku);
+    const out = new Set<THREE.Material>();
+    detailedPart(parts[0], { siblings: parts, materials })?.traverse((c) => { if (c instanceof THREE.Mesh) out.add(c.material as THREE.Material); });
+    return out;
+  };
+
+  it("a black vessel basin renders in dark ceramic, a white one in white", () => {
+    expect(meshMaterials("K-28784IN-7").has(materials.darkCeramic)).toBe(true);
+    expect(meshMaterials("K-28784IN-7").has(materials.ceramic)).toBe(false);
+    expect(meshMaterials("K-25318IN-0").has(materials.ceramic)).toBe(true);
+  });
+});

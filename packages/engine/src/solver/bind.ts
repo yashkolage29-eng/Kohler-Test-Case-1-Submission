@@ -17,6 +17,7 @@ import { FINISHES } from "../catalog/data/finishes.js";
 import type { FeatureTag } from "../contracts/vocab.js";
 import { effectiveCountRange } from "./archetypes.js";
 import { productType } from "../catalog/traits.js";
+import { LUXURY_TAGS } from "../objective/scores.js";
 
 /** Planning-level cap on SKU-sets enumerated per count vector (pending audit). */
 export const MAX_SKU_SETS_PER_VECTOR = 64;
@@ -25,6 +26,36 @@ export const MAX_COUNT_VECTORS = 16;
 
 function pairCompatible(graph: CatalogState["compatibilityGraph"], a: SKU, b: SKU): boolean {
   return graph.get(a.model_id)?.includes(b.model_id) ?? false;
+}
+
+/** T-032 objective axes for the themed seed sets (lower key = better on that axis). The
+ *  cheapest-first enumeration alone only ever reaches the cheapest few SKUs per class,
+ *  so priority/spaciousness/budget had nothing different to choose between. One greedy
+ *  set per axis puts each objective's best affordable SKUs in front of the scorer.
+ *  Weight-independent by construction (the candidate cache key excludes the weights). */
+/** Per-fixture luxury points exactly as u_luxury scores them (finish + premium tags, max 4). */
+function luxuryPoints(sku: SKU): number {
+  const finish = Math.max(0, ...sku.finish_options.map((id) => FINISHES.find((f) => f.id === id)?.luxuryPoints ?? 0));
+  return finish * 20 + 10 * Math.min(LUXURY_TAGS.filter((t) => sku.feature_tags.includes(t)).length, 4);
+}
+
+function themeAxes(input: InputSet): { key: (sku: SKU) => number; cap: number; sizeVariants?: boolean }[] {
+  const finishById = new Map(FINISHES.map((finish) => [finish.id, finish] as const));
+  const best = (sku: SKU, pts: (f: { luxuryPoints: number; wearResistance: number }) => number): number =>
+    Math.max(0, ...sku.finish_options.map((id) => { const f = finishById.get(id); return f ? pts(f) : 0; }));
+  const water = (sku: SKU): number =>
+    sku.fixture_class === "toilet" ? sku.water?.flushLiters ?? 0 : sku.water?.flowRateLpm ?? 0;
+  const { bTarget, bMax } = input.budget;
+  return [
+    { key: (sku) => -sku.price, cap: bTarget }, // closest to the target budget
+    { key: (sku) => -sku.price, cap: bMax }, // premium within the hard ceiling
+    // T-042: the same per-fixture points u_luxury scores (finish + premium tags, max 4).
+    { key: (sku) => -luxuryPoints(sku), cap: bMax, sizeVariants: true },
+    { key: (sku) => water(sku), cap: bMax },
+    { key: (sku) => sku.dim.w * sku.dim.d, cap: bMax }, // smallest products (airy)
+    { key: (sku) => -sku.dim.w * sku.dim.d, cap: bTarget }, // roomiest products (compact)
+    { key: (sku) => -best(sku, (f) => f.wearResistance), cap: bMax },
+  ];
 }
 
 /** SKUs usable for binding of `cls`: surviving, class-matched, graph members; sorted
@@ -71,7 +102,14 @@ export function countVectors(arch: ArchetypeTemplate, input: InputSet): FixtureC
   const build = (i: number, acc: FixtureClass[]) => {
     if (vectors.length >= MAX_COUNT_VECTORS) return;
     if (i === active.length) {
-      vectors.push([...acc]);
+      // T-032/T-036: at least one sink (standalone basin or vanity with its integrated
+      // basin), exactly one deck faucet per sink, and at least one shower or tub.
+      // The wet rule applies only when the template allows a shower or tub at all (the
+      // drop-shower fallback template allows neither).
+      const sinks = acc.filter((c) => c === "basin" || c === "vanity").length;
+      const wet = acc.filter((c) => c === "shower" || c === "tub").length;
+      const wetAllowed = active.some((a) => a.cls === "shower" || a.cls === "tub");
+      if (sinks >= 1 && (wet >= 1 || !wetAllowed) && acc.filter((c) => c === "faucet").length === sinks) vectors.push([...acc]);
       return;
     }
     const { min, max } = active[i];
@@ -120,6 +158,7 @@ export function bindSkus(
   }
 
   const out: SKU[][] = [];
+  const seen = new Set<string>();
   const bMax = input.budget.bMax;
   for (const vector of vectors) {
     const counts = new Map<string, number>();
@@ -138,17 +177,80 @@ export function bindSkus(
           : Number.POSITIVE_INFINITY; // not enough pool SKUs for the count
     }
 
+    // Feature-constraint coverage: required tags carried by the bound set, and at
+    // least one bound SKU offering a finish from the chosen families (plan-level
+    // coverage; see bindingPool — NOT a per-SKU finish filter).
+    const offersFamily = (s: SKU): boolean => s.finish_options.some((finishId) => families.has(familyByFinishId.get(finishId) ?? finishId));
+    const accept = (set: SKU[]): void => {
+      const tags = new Set(set.flatMap((s) => s.feature_tags));
+      if (!required.every((tag) => tags.has(tag))) return;
+      if (families.size > 0 && !set.some(offersFamily)) return;
+      const sorted = [...set].sort((a, b) => (a.model_id < b.model_id ? -1 : 1));
+      const key = sorted.map((s) => s.model_id).join("|");
+      if (seen.has(key)) return;
+      seen.add(key);
+      out.push(sorted);
+    };
+
+    // T-032 themed seeds first: per axis, greedily take each class's best SKUs that stay
+    // pair-compatible and leave room for the cheapest remainder under the axis cap.
+    // A family-restricted retry keeps the seeds alive under a taste finish family.
+    const greedy = (key: (sku: SKU) => number, cap: number, familyOnly: boolean): SKU[] | null => {
+      const set: SKU[] = [];
+      let cost = 0;
+      for (let i = 0; i < active.length; i++) {
+        const n = counts.get(active[i]) as number;
+        let pool = pools.get(active[i]) as SKU[];
+        if (familyOnly && pool.some(offersFamily)) pool = pool.filter(offersFamily);
+        const ordered = [...pool].sort((a, b) => key(a) - key(b) || a.price - b.price || (a.model_id < b.model_id ? -1 : 1));
+        let picked = 0;
+        for (const sku of ordered) {
+          if (picked === n) break; // bounded O(axes × pool): not charged to the node budget
+          if (cost + sku.price + suffixMin[i + 1] > cap) continue;
+          if (!set.every((c) => pairCompatible(graph, sku, c))) continue;
+          set.push(sku);
+          cost += sku.price;
+          picked++;
+        }
+        if (picked < n) return null;
+      }
+      return set;
+    };
+    // T-042: one-swap neighbours of a seed — each product replaced by the smallest and the
+    // roomiest same-class alternative with equal luxury points that stays compatible and
+    // under the cap — so the spaciousness knob can still move a luxury plan.
+    const sizeVariants = (set: SKU[], cap: number): void => {
+      const total = set.reduce((t, x) => t + x.price, 0);
+      for (const current of set) {
+        const others = set.filter((x) => x !== current);
+        const options = (pools.get(current.fixture_class) as SKU[]).filter((x) =>
+          !set.includes(x) && luxuryPoints(x) === luxuryPoints(current) &&
+          total - current.price + x.price <= cap && others.every((o) => pairCompatible(graph, x, o)));
+        const area = (x: SKU): number => x.dim.w * x.dim.d;
+        for (const pickOne of [(a: SKU, b: SKU) => area(a) - area(b), (a: SKU, b: SKU) => area(b) - area(a)]) {
+          const swap = [...options].sort((a, b) => pickOne(a, b) || a.price - b.price)[0];
+          if (swap !== undefined) accept([...others, swap]);
+        }
+      }
+    };
+    for (const axis of themeAxes(input)) {
+      if (budget.nodes <= 0 || out.length >= maxSets) break;
+      const set = greedy(axis.key, axis.cap, false);
+      if (set !== null) {
+        accept(set);
+        if (axis.sizeVariants) sizeVariants(set, axis.cap);
+      }
+      if (families.size > 0) {
+        const familySet = greedy(axis.key, axis.cap, true);
+        if (familySet !== null) accept(familySet);
+      }
+    }
+
     const chosen: SKU[] = [];
     const enumClass = (i: number, cost: number) => {
       if (budget.nodes <= 0 || out.length >= maxSets) return;
       if (i === active.length) {
-        // Feature-constraint coverage: required tags carried by the bound set, and at
-        // least one bound SKU offering a finish from the chosen families (plan-level
-        // coverage; see bindingPool — NOT a per-SKU finish filter).
-        const tags = new Set(chosen.flatMap((s) => s.feature_tags));
-        if (!required.every((tag) => tags.has(tag))) return;
-        if (families.size > 0 && !chosen.some((s) => s.finish_options.some((finishId) => families.has(familyByFinishId.get(finishId) ?? finishId)))) return;
-        out.push([...chosen].sort((a, b) => (a.model_id < b.model_id ? -1 : 1)));
+        accept(chosen);
         return;
       }
       if (cost + suffixMin[i] > bMax) return; // cost-aware pruning

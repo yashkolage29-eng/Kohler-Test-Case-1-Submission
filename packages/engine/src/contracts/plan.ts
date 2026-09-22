@@ -1,4 +1,5 @@
 import type { Priority, Spaciousness } from "./vocab.js";
+import type { InputSet } from "./input.js";
 // Plan & output contracts — mirrors SYS-ARCH §5.4 and OPT §3/§10.
 // BuildOutput is the ONLY thing solve()/reoptimize() may return. There is no invalid
 // plan shape: plan | relaxation menu | honest out-of-scope (ADR-015).
@@ -56,6 +57,9 @@ export interface RelaxationPlan {
   tradeoffDelta: string;
   /** Independently re-searched and fully re-validated plan (OPT §10.2.3). */
   plan: Plan;
+  /** T-041: the relaxed brief this plan was solved from, so callers can derive its
+   *  per-priority alternatives. */
+  input?: InputSet;
 }
 
 /** 1–3 distinct valid relaxed plans; count enforced by the solver, not the type. */

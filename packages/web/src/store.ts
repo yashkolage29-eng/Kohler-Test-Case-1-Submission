@@ -7,6 +7,8 @@ import {
   FINISH_FAMILIES,
   FIXTURE_CLASSES,
   STYLES,
+  DEFAULT_PRIORITY,
+  alternativeProfiles,
   buildWallStrips,
   stripPoint,
   reoptimize,
@@ -28,6 +30,9 @@ import {
 } from "@kolher/engine";
 
 export type RoomShape = "rectangle" | "l-shape";
+export type PriorityPlans = Partial<Record<Priority, Plan>>;
+/** Result tab order, cheapest lean first. */
+export const PRIORITY_TABS: Priority[] = ["value", "balanced", "eco-low-maintenance", "luxury"];
 /** "style" = curated preset décor (no AI call). */
 export type DecorSource = "ai" | "offline" | "style";
 export type Screen = "room" | "taste" | "result";
@@ -59,7 +64,21 @@ export interface TasteState {
   bMax: string;
   /** Curated aesthetic (T-027b); drives décor + room materials without an AI call. */
   stylePreset?: StylePreset;
+  /** T-036 wanted-fixtures list (toilet is always included). Checked = include,
+   *  unchecked = exclude; the sink is one choice, "auto" = vanity when it fits. */
+  fixtures: FixtureWants;
 }
+
+export type SinkChoice = "auto" | "vanity" | "basin";
+export type OptionalFixture = "shower" | "tub" | "accessory";
+export interface FixtureWants {
+  shower: boolean;
+  tub: boolean;
+  accessory: boolean;
+  sink: SinkChoice;
+}
+
+export const DEFAULT_FIXTURE_WANTS: FixtureWants = { shower: true, tub: false, accessory: false, sink: "auto" };
 
 export type RoomSelection = { kind: "wall" | "opening"; id: string };
 
@@ -94,11 +113,12 @@ export interface AppState {
   solveStatus: AsyncStatus;
   solveMessage?: string;
   output?: BuildOutput;
+  /** T-041: a validated plan per priority tab, one entry per plan/recovery option. */
+  priorityPlans?: PriorityPlans[];
   viewMode: ViewMode;
   selectedRelaxation?: number;
   selectedRelaxationKind?: RelaxationKind;
   adjustments: {
-    fixtureClass: FixtureClass | "";
     doorOffsetMm: string;
   };
   tradeoffNarration?: string[];
@@ -132,12 +152,13 @@ export function initialState(): AppState {
       spaciousness: "balanced",
       bTarget: "180000",
       bMax: "250000",
+      fixtures: DEFAULT_FIXTURE_WANTS,
     },
     tasteStatus: "idle",
     aiPosture: "offline",
     solveStatus: "idle",
     viewMode: "3d",
-    adjustments: { fixtureClass: "", doorOffsetMm: "" },
+    adjustments: { doorOffsetMm: "" },
     adjustmentsDirty: false,
   };
 }
@@ -173,13 +194,15 @@ export type Action =
   | { type: "SET_FINISH_FAMILY"; family: FinishFamily }
   /** Toggle a style preset; selecting one also selects its finish family when the catalog offers it. */
   | { type: "SET_STYLE_PRESET"; preset: StylePreset; finishFamily?: FinishFamily }
-  | { type: "SET_PRIORITY"; value: Priority }
+  /** T-041: pick a result tab; every tab's plan is already validated, so nothing re-solves. */
+  | { type: "SELECT_PRIORITY"; value: Priority }
   | { type: "SET_SPACIOUSNESS"; value: Spaciousness }
   | { type: "SET_BUDGET"; field: "bTarget" | "bMax"; value: string }
-  | { type: "SET_FIXTURE_CLASS"; value: FixtureClass | "" }
+  | { type: "SET_FIXTURE_WANT"; fixture: OptionalFixture; value: boolean }
+  | { type: "SET_SINK"; value: SinkChoice }
   | { type: "SET_DOOR_OFFSET"; value: string }
   | { type: "SOLVE_START"; preserveOutput?: boolean }
-  | { type: "SOLVE_RESULT"; output: BuildOutput }
+  | { type: "SOLVE_RESULT"; output: BuildOutput; profiles?: PriorityPlans[] }
   | { type: "SOLVE_ERROR"; message: string; preserveOutput?: boolean }
   | { type: "SET_VIEW_MODE"; value: ViewMode }
   | { type: "SELECT_RELAXATION"; index: number }
@@ -325,11 +348,14 @@ function reduceAction(state: AppState, action: Action): AppState {
     }
     case "ADD_WINDOW": {
       if (!state.roomEditor || !state.preview) return state;
-      const wall = buildWallStrips(state.preview.polygon).find((strip) => strip.usableLengthMm >= 600 && !state.preview!.openings.some((opening) => opening.wallId === strip.id));
-      if (!wall) return { ...state, roomError: "No empty wall fits a 600 mm window. Move an opening first." };
+      // T-037: centre the new window in the largest free gap on any wall (several windows
+      // per wall are fine); refuse only when no gap fits a 600 mm window.
+      const gap = largestFreeGap(state.preview);
+      if (!gap || gap.lengthMm < WINDOW_SPAN_MM) return { ...state, roomError: "No wall has a free 600 mm gap for another window. Move or remove an opening first." };
       let index = 1;
       while (state.preview.openings.some((opening) => opening.id === `window-${index}`)) index++;
-      return { ...updateOpenings(state, [...state.preview.openings, { id: `window-${index}`, kind: "window", wallId: wall.id, alongOffsetMm: 0, spanMm: 600 }]), roomSelection: { kind: "opening", id: `window-${index}` } };
+      const alongOffsetMm = Math.round(gap.startMm + (gap.lengthMm - WINDOW_SPAN_MM) / 2);
+      return { ...updateOpenings(state, [...state.preview.openings, { id: `window-${index}`, kind: "window", wallId: gap.wallId, alongOffsetMm, spanMm: WINDOW_SPAN_MM }]), roomSelection: { kind: "opening", id: `window-${index}` } };
     }
     case "REMOVE_WINDOW": {
       const opening = state.preview?.openings.find((item) => item.id === action.id && item.kind === "window");
@@ -378,10 +404,8 @@ function reduceAction(state: AppState, action: Action): AppState {
         : [...current, action.family].sort();
       return { ...state, taste: { ...state.taste, featureConstraints: { ...state.taste.featureConstraints, finishFamilies } }, output: undefined, solveStatus: "idle", selectedRelaxation: undefined, selectedRelaxationKind: undefined, adjustmentKind: undefined };
     }
-    case "SET_PRIORITY":
-      return state.screen === "result"
-        ? { ...state, taste: { ...state.taste, priority: action.value }, adjustmentKind: state.adjustmentKind === "global" || state.adjustmentKind === "local" ? "global" : "weights", adjustmentsDirty: true }
-        : { ...state, taste: { ...state.taste, priority: action.value }, output: undefined, solveStatus: "idle", selectedRelaxation: undefined, selectedRelaxationKind: undefined, adjustmentKind: undefined };
+    case "SELECT_PRIORITY":
+      return { ...state, taste: { ...state.taste, priority: action.value } };
     case "SET_SPACIOUSNESS":
       return state.screen === "result"
         ? { ...state, taste: { ...state.taste, spaciousness: action.value }, adjustmentKind: state.adjustmentKind === "global" || state.adjustmentKind === "local" ? "global" : "weights", adjustmentsDirty: true }
@@ -390,22 +414,30 @@ function reduceAction(state: AppState, action: Action): AppState {
       return state.screen === "result"
         ? { ...state, taste: { ...state.taste, [action.field]: action.value }, solveMessage: undefined, adjustmentKind: "global", adjustmentsDirty: true }
         : { ...state, taste: { ...state.taste, [action.field]: action.value }, solveMessage: undefined, output: undefined, solveStatus: "idle", selectedRelaxation: undefined, selectedRelaxationKind: undefined, adjustmentKind: undefined };
-    case "SET_FIXTURE_CLASS":
-      return state.screen === "result"
-        ? { ...state, adjustments: { ...state.adjustments, fixtureClass: action.value }, solveMessage: undefined, adjustmentKind: "global", adjustmentsDirty: true }
-        : { ...state, adjustments: { ...state.adjustments, fixtureClass: action.value }, solveMessage: undefined, output: undefined, solveStatus: "idle", selectedRelaxation: undefined, selectedRelaxationKind: undefined, adjustmentKind: undefined };
+    case "SET_FIXTURE_WANT":
+    case "SET_SINK": {
+      const fixtures: FixtureWants = action.type === "SET_SINK"
+        ? { ...state.taste.fixtures, sink: action.value }
+        : { ...state.taste.fixtures, [action.fixture]: action.value };
+      const taste = { ...state.taste, fixtures };
+      return state.output
+        ? { ...state, taste, solveMessage: undefined, adjustmentKind: "global", adjustmentsDirty: true }
+        : { ...state, taste, solveMessage: undefined, output: undefined, solveStatus: "idle", selectedRelaxation: undefined, selectedRelaxationKind: undefined, adjustmentKind: undefined };
+    }
     case "SET_DOOR_OFFSET":
       return state.screen === "result"
         ? { ...state, adjustments: { ...state.adjustments, doorOffsetMm: action.value }, solveMessage: undefined, adjustmentKind: state.adjustmentKind === "global" ? "global" : "local", adjustmentsDirty: true }
         : { ...state, adjustments: { ...state.adjustments, doorOffsetMm: action.value }, solveMessage: undefined, output: undefined, solveStatus: "idle", selectedRelaxation: undefined, selectedRelaxationKind: undefined, adjustmentKind: undefined };
     case "SOLVE_START":
-      return { ...state, solveStatus: "loading", solveMessage: undefined, output: action.preserveOutput ? state.output : undefined, selectedRelaxation: action.preserveOutput ? state.selectedRelaxation : undefined, selectedRelaxationKind: action.preserveOutput ? state.selectedRelaxationKind : undefined, tradeoffNarration: undefined };
+      // A fresh solve opens on the Balanced tab; a re-optimize keeps the chosen tab.
+      return { ...state, taste: action.preserveOutput ? state.taste : { ...state.taste, priority: "balanced" }, solveStatus: "loading", solveMessage: undefined, output: action.preserveOutput ? state.output : undefined, selectedRelaxation: action.preserveOutput ? state.selectedRelaxation : undefined, selectedRelaxationKind: action.preserveOutput ? state.selectedRelaxationKind : undefined, tradeoffNarration: undefined };
     case "SOLVE_RESULT":
       return {
         ...state,
         screen: "result",
         solveStatus: "success",
         output: action.output,
+        priorityPlans: action.profiles,
         selectedRelaxation: action.output.kind === "relaxation"
           ? Math.max(0, state.selectedRelaxationKind ? action.output.menu.findIndex((item) => item.kind === state.selectedRelaxationKind) : state.selectedRelaxation ?? 0)
           : undefined,
@@ -551,6 +583,26 @@ export function rehomeOpenings(from: RoomPolygon, to: RoomPolygon, openings: Inp
   return placed;
 }
 
+const WINDOW_SPAN_MM = 600;
+
+/** Largest opening-free stretch across all walls (longest first, then wall order). */
+function largestFreeGap(preview: RoomPreview): { wallId: string; startMm: number; lengthMm: number } | undefined {
+  let best: { wallId: string; startMm: number; lengthMm: number } | undefined;
+  for (const wall of buildWallStrips(preview.polygon)) {
+    const taken = preview.openings
+      .filter((o) => o.wallId === wall.id)
+      .map((o) => [o.alongOffsetMm, o.alongOffsetMm + o.spanMm] as const)
+      .sort((a, b) => a[0] - b[0]);
+    let cursor = 0;
+    for (const [start, end] of [...taken, [wall.usableLengthMm, wall.usableLengthMm] as const]) {
+      const lengthMm = start - cursor;
+      if (!best || lengthMm > best.lengthMm) best = { wallId: wall.id, startMm: cursor, lengthMm };
+      cursor = Math.max(cursor, end);
+    }
+  }
+  return best;
+}
+
 export function openingError(preview: RoomPreview): string | undefined {
   const walls = buildWallStrips(preview.polygon);
   for (const opening of preview.openings) {
@@ -661,16 +713,24 @@ export function buildConfirmedInput(state: AppState): { ok: true; input: InputSe
   if (!target.ok) return target;
   if (!maximum.ok) return maximum;
   if (target.value > maximum.value) return { ok: false, message: "Target budget cannot exceed the maximum budget." };
-  const fixtureClass = state.adjustments.fixtureClass;
-  const baseConstraints: FeatureConstraints = fixtureClass
-    ? {
-        ...state.taste.featureConstraints,
-        classCountRanges: {
-          ...state.taste.featureConstraints.classCountRanges,
-          [fixtureClass]: { min: 1, max: 1 },
-        },
-      }
-    : state.taste.featureConstraints;
+  const wants = state.taste.fixtures;
+  if (!wants.shower && !wants.tub) return { ok: false, message: "Choose a shower, a tub, or both." };
+  const include = { min: 1, max: 1 };
+  const exclude = { min: 0, max: 0 };
+  const sink: FeatureConstraints["classCountRanges"] = wants.sink === "vanity"
+    ? { vanity: include, basin: exclude }
+    : wants.sink === "basin" ? { basin: include, vanity: exclude } : {};
+  const baseConstraints: FeatureConstraints = {
+    ...state.taste.featureConstraints,
+    classCountRanges: {
+      ...state.taste.featureConstraints.classCountRanges,
+      toilet: include,
+      shower: wants.shower ? include : exclude,
+      tub: wants.tub ? include : exclude,
+      accessory: wants.accessory ? include : exclude,
+      ...sink,
+    },
+  };
   // A chosen style steers product forms (vessel basin, wall-hung WC…) as a preference.
   const featureConstraints: FeatureConstraints = state.taste.stylePreset
     ? { ...baseConstraints, preferredTypes: STYLES[state.taste.stylePreset].products }
@@ -712,7 +772,7 @@ export function buildConfirmedInput(state: AppState): { ok: true; input: InputSe
   };
 }
 
-export function selectedPlan(state: AppState): Plan | null {
+function basePlan(state: AppState): Plan | null {
   const output = state.output;
   if (!output) return null;
   if (output.kind === "plan") return output.plan;
@@ -720,11 +780,52 @@ export function selectedPlan(state: AppState): Plan | null {
   return null;
 }
 
-export function solveConfirmed(state: AppState, catalog: CatalogState): { ok: true; output: BuildOutput } | { ok: false; message: string } {
+function optionIndex(state: AppState): number {
+  return state.output?.kind === "relaxation" ? state.selectedRelaxation ?? 0 : 0;
+}
+
+export function selectedPlan(state: AppState): Plan | null {
+  const base = basePlan(state);
+  if (!base) return null;
+  return state.priorityPlans?.[optionIndex(state)]?.[state.taste.priority] ?? base;
+}
+
+/** T-041: the result tabs for the current plan or recovery option. `sameAs` names the
+ *  first earlier tab that picked the same products. */
+export function priorityTabs(state: AppState): { priority: Priority; plan: Plan; sameAs?: Priority }[] {
+  if (!basePlan(state)) return [];
+  const plans = state.priorityPlans?.[optionIndex(state)];
+  if (!plans) return [];
+  const tabs: { priority: Priority; plan: Plan; sameAs?: Priority }[] = [];
+  for (const priority of PRIORITY_TABS) {
+    const plan = plans[priority];
+    if (!plan) continue;
+    const first = tabs.find((t) => t.plan.selectedCandidate.id === plan.selectedCandidate.id);
+    tabs.push({ priority, plan, ...(first ? { sameAs: first.sameAs ?? first.priority } : {}) });
+  }
+  return tabs;
+}
+
+/** Every priority's plan for each plan / recovery option of an output, re-scored from the
+ *  same cached candidate set (T-041). */
+function profilesFor(output: BuildOutput, input: InputSet, catalog: CatalogState): PriorityPlans[] | undefined {
+  const options = output.kind === "plan"
+    ? [{ plan: output.plan, input }]
+    : output.kind === "relaxation" ? output.menu.map((item) => ({ plan: item.plan, input: item.input ?? input })) : [];
+  if (options.length === 0) return undefined;
+  return options.map(({ plan, input: optionInput }) => {
+    const plans: PriorityPlans = { [optionInput.priority ?? DEFAULT_PRIORITY]: plan };
+    for (const alt of alternativeProfiles(optionInput, catalog)) plans[alt.profile] = alt.plan;
+    return plans;
+  });
+}
+
+export function solveConfirmed(state: AppState, catalog: CatalogState): { ok: true; output: BuildOutput; profiles?: PriorityPlans[] } | { ok: false; message: string } {
   const input = buildConfirmedInput(state);
   if (!input.ok) return input;
   try {
-    return { ok: true, output: solve(input.input, catalog) };
+    const output = solve(input.input, catalog);
+    return { ok: true, output, profiles: profilesFor(output, input.input, catalog) };
   } catch {
     return { ok: false, message: "The deterministic engine could not process this brief. Check the room and budget values." };
   }
@@ -734,13 +835,14 @@ export function reoptimizeConfirmed(
   state: AppState,
   catalog: CatalogState,
   change: ReoptChange,
-): { ok: true; output: BuildOutput } | { ok: false; message: string } {
+): { ok: true; output: BuildOutput; profiles?: PriorityPlans[] } | { ok: false; message: string } {
   const input = buildConfirmedInput(state);
   const previous = selectedPlan(state);
   if (!input.ok) return input;
   if (!previous) return { ok: false, message: "Choose a validated plan before adjusting the brief." };
   try {
-    return { ok: true, output: reoptimize(previous, change, input.input, catalog) };
+    const output = reoptimize(previous, change, input.input, catalog);
+    return { ok: true, output, profiles: profilesFor(output, input.input, catalog) };
   } catch {
     return { ok: false, message: "This adjustment could not produce a validated result. Try a smaller change." };
   }

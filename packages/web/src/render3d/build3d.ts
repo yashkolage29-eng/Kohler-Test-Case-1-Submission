@@ -84,7 +84,8 @@ export function buildSceneGroup(spec: SceneSpec, opts: SceneGroupOptions = {}): 
     if (part.inward) tagWall(object, { x: part.positionMm.x, z: part.positionMm.z }, part.inward);
     group.add(object);
   });
-  dressRoomShell(group, opts.style, opts.onTextureLoad);
+  const wet = spec.parts.find((p) => p.fixtureClass === "shower") ?? spec.parts.find((p) => p.fixtureClass === "tub");
+  dressRoomShell(group, opts.style, opts.onTextureLoad, wet && { x: wet.positionMm.x, z: wet.positionMm.z });
   return group;
 }
 
@@ -102,7 +103,7 @@ const METAL: Record<PlacedDecor["metal"], { color: string; roughness: number; me
  *  where physical inverse-square falloff would make any sane intensity invisible. */
 const DECOR_LIGHT_SCALE = 1.1;
 const DECOR_LIGHT_RANGE_MM = 2600;
-const MAX_SCENE_DECOR_LIGHTS = 3;
+const MAX_SCENE_DECOR_LIGHTS = 4; // T-043: large rooms may light a fourth lamp (decorCaps)
 
 function matte(color: THREE.ColorRepresentation, roughness = 0.85): THREE.MeshStandardMaterial {
   return new THREE.MeshStandardMaterial({ color, roughness, metalness: 0 });
@@ -227,6 +228,71 @@ function decorMeshes(item: PlacedDecor, group: THREE.Group): void {
     }
     case "bowl": {
       put(group, new THREE.CylinderGeometry(w / 2, w * 0.3, h, 24), matte(item.color, 0.7), 0, h / 2, 0, b);
+      break;
+    }
+    // T-043 room-filling pieces.
+    case "towel-ladder": {
+      for (const side of [-1, 1]) put(group, new THREE.BoxGeometry(30, h, 30), matte(item.color, 0.6), side * (w / 2 - 15), h / 2, 0, b);
+      for (let i = 1; i <= 4; i++) put(group, new THREE.CylinderGeometry(12, 12, w - 30, 12), matte(item.color, 0.6), 0, (h * i) / 5, 0, b).rotation.z = Math.PI / 2;
+      put(group, new THREE.BoxGeometry(w * 0.8, h * 0.28, 20), matte(new THREE.Color(item.color).offsetHSL(0, -0.1, 0.25), 1), 0, h * 0.62, 18, b);
+      break;
+    }
+    case "cabinet": {
+      put(group, new THREE.BoxGeometry(w, h * 0.96, d), matte(item.color, 0.55), 0, h * 0.5, 0, b);
+      put(group, new THREE.BoxGeometry(w, h * 0.04, d * 0.9), matte("#2a2a2a", 0.8), 0, h * 0.02, 0, b);
+      put(group, new THREE.BoxGeometry(4, h * 0.9, 4), matte("#1a1a1a", 1), 0, h * 0.5, d / 2 + 1, b);
+      for (const side of [-1, 1]) put(group, new THREE.BoxGeometry(12, 120, 14), metalMat, side * 30, h * 0.55, d / 2 + 7, b);
+      break;
+    }
+    case "side-table": {
+      put(group, new THREE.CylinderGeometry(w / 2, w / 2, 30, 32), matte(item.color, 0.5), 0, h - 15, 0, b);
+      put(group, new THREE.CylinderGeometry(20, 20, h - 60, 12), metalMat, 0, (h - 30) / 2 + 15, 0, b);
+      put(group, new THREE.CylinderGeometry(w * 0.35, w * 0.35, 30, 32), metalMat, 0, 15, 0, b);
+      break;
+    }
+    case "floor-mirror": {
+      put(group, new THREE.BoxGeometry(w, h, d * 0.5), metalMat, 0, h / 2, -d * 0.1, b);
+      put(group, new THREE.BoxGeometry(w - 60, h - 60, d * 0.3), glass(), 0, h / 2, d * 0.1, b);
+      break;
+    }
+    case "bath-mat": {
+      put(group, new THREE.BoxGeometry(w, h, d), matte(new THREE.Color(item.color).offsetHSL(0, -0.05, 0.1), 1), 0, h / 2, 0, b).castShadow = false;
+      break;
+    }
+    case "tub-tray": {
+      put(group, new THREE.BoxGeometry(w, h * 0.5, d), matte("#8a6a4a", 0.6), 0, h * 0.25, 0, b);
+      put(group, new THREE.CylinderGeometry(35, 35, 90, 16), matte("#f3ead8", 0.7), -w * 0.25, h * 0.5 + 45, 0, b);
+      put(group, new THREE.SphereGeometry(6, 8, 6), glow("#ffb347", 3), -w * 0.25, h * 0.5 + 96, 0, b).castShadow = false;
+      put(group, new THREE.CylinderGeometry(40, 30, 120, 16), new THREE.MeshStandardMaterial({ color: item.color, roughness: 0.3 }), w * 0.2, h * 0.5 + 60, 0, b);
+      break;
+    }
+    case "niche-shelf": {
+      put(group, new THREE.BoxGeometry(w, h, d), matte(new THREE.Color(item.color).offsetHSL(0, 0, -0.08), 0.7), 0, h / 2, -d * 0.1, b);
+      put(group, new THREE.BoxGeometry(w - 40, 18, d * 0.9), matte("#f2efe9", 0.6), 0, h * 0.45, 0, b);
+      put(group, new THREE.CylinderGeometry(35, 35, 110, 16), matte("#ffffff", 0.4), -w * 0.25, h * 0.45 + 64, 0, b);
+      put(group, new THREE.CylinderGeometry(30, 30, 140, 16), matte(item.color, 0.4), w * 0.2, h * 0.45 + 79, 0, b);
+      break;
+    }
+    case "laundry-basket": {
+      put(group, new THREE.CylinderGeometry(w / 2, w * 0.44, h * 0.92, 24, 1, true), new THREE.MeshStandardMaterial({ color: "#b89468", roughness: 0.95, side: THREE.DoubleSide }), 0, h * 0.46, 0, b);
+      put(group, new THREE.CylinderGeometry(w / 2 + 4, w / 2 + 4, h * 0.08, 24), matte("#9c7a52", 0.9), 0, h * 0.96, 0, b);
+      break;
+    }
+    case "floor-lamp": {
+      put(group, new THREE.CylinderGeometry(w * 0.35, w * 0.38, 25, 28), metalMat, 0, 12, 0, b);
+      put(group, new THREE.CylinderGeometry(10, 10, h * 0.8, 10), metalMat, 0, h * 0.4, 0, b);
+      put(group, new THREE.CylinderGeometry(w * 0.3, w / 2, h * 0.22, 28, 1, true), new THREE.MeshStandardMaterial({ color: "#f3ead8", emissive: light, emissiveIntensity: 0.6, roughness: 0.7, side: THREE.DoubleSide }), 0, h * 0.88, 0, b);
+      break;
+    }
+    case "led-strip": {
+      put(group, new THREE.BoxGeometry(w, h * 0.4, d * 0.6), glow(light, 2.4), 0, h * 0.3, d * 0.2, b).castShadow = false;
+      put(group, new THREE.BoxGeometry(w, h * 0.6, d), matte("#2a2a2a", 0.7), 0, h * 0.7, 0, b);
+      break;
+    }
+    case "sculpture": {
+      put(group, new THREE.BoxGeometry(w * 0.7, h * 0.55, w * 0.7), matte("#d9d4cc", 0.8), 0, h * 0.275, 0, b);
+      const form = put(group, new THREE.TorusKnotGeometry(w * 0.2, w * 0.06, 64, 10), new THREE.MeshStandardMaterial({ color: item.color, roughness: 0.3, metalness: 0.4 }), 0, h * 0.78, 0, b);
+      form.scale.y = 1.3;
       break;
     }
     case "stool": {

@@ -148,11 +148,13 @@ export function createAppHandler(opts: ServerOptions): (req: IncomingMessage, re
       }
       if (bodyObj.request === "decor") {
         const payload = parsed as Record<string, unknown>;
-        if (Object.keys(payload).some((key) => !["request", "text", "fixtures"].includes(key)) || typeof payload.text !== "string" || payload.text.length > 4000 || !isDecorFixtures(payload.fixtures)) {
-          sendJson(res, 400, { error: "Invalid decor request. Expected { request, text, fixtures }." });
+        const target = payload.targetItems;
+        const targetOk = target === undefined || (Number.isInteger(target) && (target as number) >= 6 && (target as number) <= 24);
+        if (Object.keys(payload).some((key) => !["request", "text", "fixtures", "targetItems"].includes(key)) || typeof payload.text !== "string" || payload.text.length > 4000 || !isDecorFixtures(payload.fixtures) || !targetOk) {
+          sendJson(res, 400, { error: "Invalid decor request. Expected { request, text, fixtures, targetItems? (6–24) }." });
           return;
         }
-        const result = await ai.decor(payload.text, payload.fixtures);
+        const result = await ai.decor(payload.text, payload.fixtures, target as number | undefined);
         if (result.fallback) sendJson(res, 200, { fallback: true, reason: result.reason, task: "decor", proposal: result.value });
         else sendJson(res, 200, { ok: true, task: "decor", proposal: result.value });
         return;

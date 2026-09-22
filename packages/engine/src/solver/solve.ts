@@ -12,6 +12,13 @@ import { bindSkus } from "./bind.js";
 import { solvePlacements } from "./place.js";
 import { assembleCandidate, candidateKey } from "./assemble.js";
 
+/** T-032: placement variants of one SKU set score identically on every term except
+ *  none (u_space is footprint-based), so a few valid layouts per set are enough; the
+ *  shared node budget then reaches many more SKU sets instead of hundreds of layouts
+ *  of the cheapest one. Planning-level caps. */
+const PLACEMENTS_PER_SET = 48;
+const VALID_PER_SET = 3;
+
 /** Typed solver result (ranking-ready; scoring/receipts are T-009 scope). */
 export type SolverResult =
   | { kind: "ok"; candidates: Candidate[] }
@@ -46,12 +53,14 @@ export function runConstructiveSolver(input: InputSet, catalog: CatalogState): S
     const skuSets = bindSkus(arch, input, catalog, budget);
     for (const skuSet of skuSets) {
       if (budget.nodes <= 0) break;
-      const search = solvePlacements(skuSet, rep, input, budget);
+      const search = solvePlacements(skuSet, rep, input, budget, PLACEMENTS_PER_SET);
       for (const blocker of search.blockers) blockerSet.add(blocker);
+      let valid = 0;
       for (const bindings of search.bindings) {
         const candidate = assembleCandidate(bindings, input, catalog, rep);
         if (candidate === null) continue; // failed full validation — never emitted
         byKey.set(candidateKey(candidate), candidate);
+        if (++valid >= VALID_PER_SET) break;
       }
       if (budget.nodes <= 0) break;
     }

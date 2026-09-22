@@ -1609,3 +1609,235 @@ bathroom-fixture brand without changing product behaviour.
 - Spruce pass (same day): topbar is spruce with an ivory wordmark; headings, legends, links, secondary buttons and completed steps use spruce; panel headers sit on a sage band.
 - Font files add ~20 small woff/woff2 assets to the build; browsers fetch only the latin subsets needed.
 
+
+## ADR-034 — Steering knobs must move the plan; every plan is a complete bathroom (T-032, T-034, T-035)
+
+### Context
+User report: re-optimize "does nothing", products look the same for every aesthetic and priority, and the
+budget "feels made up". Measured on the default brief (2400 × 1800 room, ₹1.8L target): the solver produced
+only 8 distinct SKU sets (cheapest basin + cheapest toilet fixed, only the faucet varied), every priority,
+spaciousness value and budget returned the same ₹33,100 toilet + basin + faucet plan, and standalone deck
+basins rendered on a bare slab that looked like it floated.
+
+Causes: binding pools are cheapest-first and capped at 64 sets; the shared 10,000-node budget was spent on up
+to 512 placement variants of those first sets; the `compact-guest` archetype (no shower) was tried first and
+won on spare floor; `u_cost` scored everything at or under target as 1.0, so the budget acted only as a
+ceiling.
+
+### Decision
+1. **Shower required.** `compact-guest` is now a `fallback` archetype, skipped by default. The only way to
+   reach it is the labeled `drop-class` relaxation "shower removed — no shower layout fits this room and
+   budget".
+2. **One sink, vanity by default.** Every count vector needs ≥1 sink (basin or vanity) and exactly one
+   faucet per sink. With no style basin preference and no taste count on basin/vanity, the solve first tries
+   vanity-only (the catalog vanity is cabinet + top + integrated basin, so it replaces the basin rather than
+   joining it). A style with a basin preference first tries basin-only. Either way it falls back to the
+   unconstrained set when infeasible. Deck faucets mount on a vanity like on a basin (placement, C1 deck
+   exemption); vanity × faucet uses the basin rule (standard, not tall).
+3. **Themed seed sets.** Before the cheapest-first enumeration, `bindSkus` emits one greedy set per
+   objective axis: closest to B_target, premium within B_max, luxury, water, footprint, wear resistance.
+   These sets don't depend on the weights, so the candidate cache key stays valid.
+4. **Placement caps.** The solver checks at most 48 placements per SKU set and keeps 3 valid layouts per set,
+   so the node budget reaches many sets. Measured: 8 → 34 distinct sets on the default brief.
+5. **Cost curve.** `config.costCurve` sets `u_cost` at zero spend and at B_target per priority; it is linear
+   in between and falls linearly to 0 at B_max. Balanced/luxury go 0.5 → 1.0, so leaving budget unused
+   costs score. Value goes 1.0 → 0.7 (savings rewarded). Eco is flat at 1.0.
+6. **Measured raise-budget.** With a mandatory shower the per-class cheapest set often has no valid layout,
+   so `budgetDeficitInr` is now measured from the cheapest validated candidate. `minViableCost` remains the
+   estimate for the out-of-scope wall; it now skips fallback archetypes, ignores optional classes and adds
+   the mandatory sink.
+7. **Render (presentation only, never in the BOM).** Undercounter/vessel basins stand on an open-topped
+   cabinet under the counter slab. Wall-mount basins get a bottle trap and a waste pipe into the wall. A
+   faucet on a vanity is lifted onto the vanity top. Custom-taste lights (no preset) are chosen by the
+   décor metal. The caption reads "Décor and lights … not in the budget or BOM".
+8. **BOM names.** BOM rows and the CSV show the catalog product name next to the model id.
+
+### Consequences
+- Default brief now (balanced spaciousness): value/eco ₹77,300; balanced/luxury ₹1,80,000; ₹60k brief ₹71,670; ₹5L brief ₹5,64,300.
+  Presets differ across priorities (for example Classic Luxury: ₹75,000 value vs ₹1,47,300 luxury).
+- **Spaciousness = product size (user decision, option b).** Spare floor varies only ~0.85–0.87 between
+  candidate sets, so on its own even a ×2.5 space weight changed nothing. For airy/compact, `u_space` is now
+  the mean of spare floor and a size fit: each floor fixture's footprint is ranked between the catalog's
+  smallest and largest product of its class (catalog-anchored, independent of candidate-set size). Airy
+  rewards small products, compact rewards roomy ones, balanced keeps spare floor only. This departs from
+  OPT §6.1's plain spare-floor term. A "roomiest products" seed axis (capped at B_target) gives compact real
+  options. It is a weights-only change, so the candidate cache stays valid and the store's re-optimize
+  classification ("weights") is unchanged.
+  Measured on the default brief: balanced priority, compact → Jute 36" vanity + one-piece WC (₹1,71,500);
+  airy/balanced → 24" vanity + wall-hung WC. Tight budgets (₹60k) leave one affordable set, so all three
+  match there.
+- Relaxation tests updated to the measured raise target (≥ the estimate). The synthetic exhaustion catalog
+  now includes a shower.
+
+## ADR-035 — Wanted-fixtures list, shower-or-tub rule, windows anywhere, 10 MB photos (T-036, T-037, T-038)
+
+### Decision
+1. **One wanted-fixtures list** (`TasteState.fixtures`) is shown on the Taste page and in the Result adjust
+   panel, where it replaces the single "Fixture mix" select. The toilet is locked on. Shower, tub and
+   accessories are checkboxes: checked = `{min:1,max:1}`, unchecked = `{min:0,max:0}`. The engine does
+   exactly what the list says. Sink is a radio: Auto (the ADR-034 vanity-first behaviour), Vanity (vanity
+   1 / basin 0) or Standalone basin (basin 1 / vanity 0). Unchecking both shower and tub blocks the brief
+   inline. Edits on the Result page count as a global change that makes the current plan stale.
+2. **Wet rule is now "at least one shower or tub"** (replacing "shower always"). Every default template
+   allows shower 0–n, tub 0–1 and accessories 0–2, so any valid list can solve. The rule applies only when
+   a template allows a wet class, which keeps the drop-shower fallback template reachable. It is now
+   labeled "shower/tub removed".
+3. **Windows:** Add window centres a 600 mm window in the largest free gap on any wall, with several
+   windows allowed per wall. It refuses only when no 600 mm gap exists. Windows are drawn sky blue at a
+   fixed screen width.
+4. **C5 forward check in the solver.** A single mid-wall window made a 5000 × 4000 room unsolvable. Mid-wall
+   slots are tried first, their rough-ins fall inside the window span, and C5 rejected them only at full
+   validation, after the 48-placement cap (ADR-034) had been spent. `roughInForwardOk` applies C5's
+   opening and rough-in separation checks during the search. It uses the same measurements, so
+   validation is unchanged.
+5. **Photos:** files up to 10 MB are accepted and re-encoded in the browser as JPEG. The long side steps
+   down 1600 → 800 px and quality 0.85 → 0.7 until the data URL is ≤ 900,000 characters. That stays under
+   the server's 1,000,000-character photo cap and 1,000,000-byte request cap, which are unchanged. An
+   8.5 MB PNG was sent as a 725,358-character request.
+
+### Consequences
+- Style presets no longer add a tub by themselves; the list decides.
+- Existing limitation, unchanged: strips shorten usable wall length by opening spans rather than modelling
+  the gap's position (`subtractKeepClear`). The forward check covers plumbing, but a non-plumbing fixture
+  can still sit in front of a window. That is allowed today and deliberate for vanities (C6).
+
+## ADR-036 — Dark themes and tolerant photo parsing (T-039)
+
+### Decision
+1. **Dark Luxury preset** (`dark-luxury`): granite floor, paint walls, matte black finish family, black
+   metal, warm light, vessel basin / wall-hung toilet / freestanding tub preferences. Keywords are
+   generic dark-style words (dark, moody, noir, gothic, charcoal, graphite, midnight, dramatic).
+2. **Dark palettes paint dark walls.** `wallHex` used to lean 25% from the default greige toward the
+   palette's lightest colour, so no palette could darken a room. When the palette's mean sRGB lightness
+   is below 0.35, walls now use its darkest colour, lifted 6% toward the greige. Without a preset, such a
+   palette also defaults the floor to granite instead of white marble.
+3. **A preset owns the paint colour.** When a preset is set, paint walls use the preset's palette, not
+   the palette that came with the décor (the offline twin or AI may detect a preset but return a
+   generic palette).
+4. **Photo scan normalises the echoed shape.** The vision model copied `room.openings` (swing as
+   `{side, leafDimsMm}`, windows without swing), which the strict parser rejected as malformed. The room
+   context now lists existing openings in the operation shape, and the swing is normalised to
+   `"in" | "out"` before strict parsing. Everything else stays strict.
+5. **Photo scans wait 25 s** (`PHOTO_TIMEOUT_MS`) instead of the 10 s text default, because a vision call
+   on a full photo is slower and timed out under provider load. The browser already waits 30 s. Still one
+   attempt, no retries, so the 40 RPM budget is unchanged.
+
+### Consequences
+- Industrial Loft keeps light paint logic (mean lightness 0.37) and brick walls anyway.
+- The vision model tends to echo the existing openings rather than find new ones; accuracy is a model
+  limit, not a parsing one.
+
+## ADR-037 — Low-budget recovery and priority tabs on the result (T-040, T-041)
+
+### Decision
+1. **Measure the budget deficit for the brief as chosen.** The deficit was measured only when the generic
+   per-class estimate exceeded B_max, and that estimate ignores pinned classes. A vanity pinned on a
+   ₹40–60k budget therefore reached the out-of-scope wall with no raise-budget option. The cheapest
+   buildable plan is now also measured when no archetype survives the pre-filter. It is found by trying
+   rising ceilings (1.25×, 1.5×, 2×, 3×, 5× B_max, then unlimited), because a single unlimited search can
+   exhaust the bounded backtracking budget on premium sets before reaching the cheap layout.
+2. **Dropping a pinned sink frees the other sink.** A sink is mandatory, so the drop-class path for a
+   pinned vanity (or basin) also releases the opposite sink class, labeled "vanity replaced by a
+   standalone basin".
+3. **The result shows Value / Balanced / Eco / Luxury tabs** instead of a Priority select (removed from the
+   Taste page and the adjust panel). Each tab is the argmax of the same cached, validated candidate set
+   under that priority's weights (`alternativeProfiles`, now reading `cachedValidatedCandidates`), so all
+   tabs are within B_max and switching never re-solves. Each tab shows its price and its difference from
+   the selected tab; a tab that picks the same products as an earlier one is tagged "Same as …". A fresh
+   solve opens on Balanced; a re-optimize keeps the chosen tab. Render, 2D, BOM and exports follow the tab.
+4. **Recovery options carry their relaxed brief** (`RelaxationPlan.input`), so each option has its own tabs.
+5. **Luxury leans to the top of the range.** Its cost curve now peaks at B_max (`costCurve.luxury.pivot:
+   "max"`); Balanced keeps its peak at B_target.
+6. **Décor follows the taste, not the tab.** Switching tabs reuses the current décor style, re-placed on
+   the new fixtures, without a new AI call (protects the 40 RPM budget).
+
+### Consequences
+- Tabs can repeat each other on tight budgets or where the catalog has nothing better; the tag says so.
+  With the default brief (₹1.8L / ₹2.5L) Luxury equals Balanced: the only pricier candidate scores lower
+  on luxury points.
+
+## ADR-038 — Premium catalog additions (T-042)
+
+### Decision
+1. **11 real KOHLER India SKUs added** (`verified_additions.ts`, checked 2026-09-22), each with identity,
+   dimension and MRP evidence from the official India PDP (embedded `Color.GST.Details_ss` and
+   `ProductOverall*Inches_s` fields, raw inch strings quoted in the evidence note):
+   Components faucet EX28093IN-8 (Matte Black, Vibrant French Gold, ₹39,500), Components tall faucet
+   EX28094IN-8 (BL, AF, ₹49,400), Statement rainhead 26294IN (BL ₹58,400, AF ₹52,300), ModernLife rainhead
+   24470IN (BL ₹58,800, AF ₹52,500), and black vessel basins KOHLER VIVE 28784IN-7 (₹20,000), Veil
+   77171IN-7 (₹25,000) and Sveda 30109IN-HB1 (₹43,500).
+2. **Two finishes added** with KOHLER's own colour names: `vibrant_french_gold` (brushed_gold family) and
+   `black_ceramic` (matte_black family). Black ceramic renders with a dark ceramic material.
+3. **Excluded, not invented:** ModernLife Edge faucets (no flow rate published) and the premium wall-hung
+   toilets (EC27791IN-HB1, EC27792IN-0, EC31014IN-0, EC26995IN-2-0), whose flush volume comes from a
+   separate in-wall tank that KOHLER India does not list. Catalog validation requires water data, and it
+   was not loosened.
+4. **Luxury seed aligned with scoring.** The luxury seed now ranks SKUs by the same points `u_luxury`
+   uses (finish points + premium tags, max 4) instead of the raw tag count, and adds one-swap size
+   variants (smallest / roomiest same-points alternative per product) so spaciousness can still move a
+   luxury plan when the room allows it.
+5. **Backtrack budget 10,000 → 20,000.** The larger pools exhausted the bounded search on one proven
+   feature brief (smart + soft-close); exhaustion took ~25 ms, the solve at 20,000 takes ~35 ms.
+
+### Consequences
+- With the default brief (₹1.8L / ₹2.5L) the four tabs are now distinct (₹71,470 / ₹171,500 / ₹91,500 /
+  ₹2,15,500). In the 2400 × 1800 default room luxury has no roomier option (the larger vanity does not
+  fit), so the airy-vs-compact test runs in a 3000 × 2400 room.
+- Premium toilets remain thin (smart toilets at ₹78,500 / ₹82,000, then ₹4.7L); adding the wall-hung
+  premium toilets needs a sourced in-wall tank flush volume.
+
+## ADR-039 — Large rooms feel furnished (T-043)
+
+### Decision
+1. **Room-scaled décor.** `decorCaps(geometry)` gives the extra pieces a room gets: none up to 5 m² of floor,
+   then one placed filler per further 0.9 m² (a 4000 × 3000 room gets 7), within MAX_DECOR_ITEMS (now 24).
+   Rooms over 8 m² may light a fourth lamp (MAX_DECOR_LIGHTS is 4 at parse time; placement allows 3 or 4).
+   Fillers that find no legal spot do not use up the quota.
+2. **New presentation-only types**: towel ladder, cabinet, side table, floor mirror, bath mat, tub tray,
+   niche shelf, laundry basket, floor lamp and LED strip (lights), and sculpture, plus a `beside-tub`
+   anchor. Tall furniture stands against a wall; bath mats may lie in front clearance like rugs; the tub
+   tray only ever rests on a tub rim. Freestanding tubs away from the walls get spots at their ends.
+3. **Per-style fillers** (`StyleDefinition.fillers`, 12 each, art and lights included) and a generic list
+   for custom styles. The AI décor prompt asks for `targetItems` (6–24) in large rooms; the engine tops up
+   anything missing deterministically, with no extra AI calls.
+4. **Two basins in big rooms.** With an Auto sink and a floor of 9 m² or more, the engine first tries two
+   standalone basins (each with its own faucet), falling back to the usual sink preference when they do
+   not fit or are unaffordable. A pinned sink choice is never doubled.
+5. **Accent wall.** With a style (or a dark palette), the wall nearest the shower (else the tub) takes the
+   style's accent material (e.g. granite for Dark Luxury, white oak for Coastal).
+6. **Not done:** a glass shower screen (the white panel in the reported screenshot was the door leaf);
+   head-only showers have no reserved zone, so a screen could overlap fixtures. Logged in TODO.
+
+## ADR-040 — OpenRouter as the AI provider (T-044)
+
+### Decision
+NVIDIA's free NIM endpoints answered every request with 503 ("Service temporarily overloaded" and
+"Worker local total request limit reached (16/16)"). The existing client already speaks the
+OpenAI-compatible chat API, so the provider is chosen by `NIM_BASE_URL`:
+- `https://openrouter.ai/api/v1` sends `reasoning: { effort: "none" }`; NVIDIA keeps
+  `chat_template_kwargs: { enable_thinking: false }`.
+- OpenRouter `:free` models allow 20 requests per minute and 50 per day without purchased credits
+  (1000 per day with at least $10 of credits). The request pools become 6 décor + 12 general = 18 per
+  minute for OpenRouter; NVIDIA keeps 10 + 25 = 35. Still one attempt, no retries.
+- Two models: `nvidia/nemotron-3.5-lightning:free` (`NIM_MODEL`, text only) for taste mapping, décor
+  and accessories, room edits, narration and tradeoffs; `inclusionai/ling-3.0-flash-vl:free`
+  (`NIM_VISION_MODEL`, image input) for photo parsing. The env variable names keep their `NIM_` prefix
+  to avoid churn. OpenRouter's free limits apply per account, so both models share the 18/min pools.
+
+### Consequences
+- The 50-requests-per-day free cap is the practical limit for demos; every failure still falls back
+  to the deterministic offline twin.
+
+### Addendum (T-044, same day) — free-model fallback chains
+Live tests showed each free model alternating between fast answers and upstream 429s (OpenRouter's
+shared provider pools), and Nemotron 3.5 Lightning taking 38–90 s. With the user's approval the
+one-attempt rule is relaxed for this case only:
+- `NIM_MODEL` / `NIM_VISION_MODEL` accept a comma-separated chain. Only an upstream 429 (a fast "busy"
+  reply) moves to the next model; timeouts, other errors and our own limiter stop the chain. At most
+  3 attempts, each reserved from the same 18/min pools.
+- Text chain: gemma-4-26b-a4b-it → nex-n2.5-mini → nemotron-3.5-lightning. Photo chain:
+  ling-3.0-flash-vl → gemma-4-26b-a4b-it → nex-n2.5-mini (all `:free`).
+- Décor (a long answer that loads behind the finished plan) waits 25 s on the server and 30 s in the
+  browser. Replies wrapped in a markdown fence are unwrapped before strict parsing.
+- Live check: photo 3.6 s (ling), décor 8.5 s (gemma 429 → nex), taste 2.0 s (gemma 429 → nex).
+

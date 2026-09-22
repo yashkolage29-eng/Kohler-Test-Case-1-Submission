@@ -1,12 +1,15 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { buildWallStrips } from "@kolher/engine";
-import { buildRoomPreview, initialState, reduceState, type AppState } from "./store.js";
+import { buildWallStrips, loadCatalog } from "@kolher/engine";
+import { buildRoomPreview, initialState, reduceState, solveConfirmed, selectedPlan, type AppState } from "./store.js";
 
 let roomScreen: typeof import("./main.js")["roomScreen"];
+let planBOM: typeof import("./main.js")["planBOM"];
+let bomCsv: typeof import("./main.js")["bomCsv"];
+let priorityTabBar: typeof import("./main.js")["priorityTabBar"];
 
 beforeAll(async () => {
   vi.stubGlobal("document", { querySelector: () => null });
-  ({ roomScreen } = await import("./main.js"));
+  ({ roomScreen, planBOM, bomCsv, priorityTabBar } = await import("./main.js"));
 });
 
 afterAll(() => vi.unstubAllGlobals());
@@ -63,5 +66,66 @@ describe("direct room preview UI", () => {
     state = reduceState(state, { type: "UPDATE_OPENING", id: "window-1", wallId: "wall-right", alongOffsetMm: 2000, spanMm: 600 });
     expect(roomScreen(state)).toContain("window-1 does not fit its wall");
     expect(roomScreen(state)).toContain('role="alert"');
+  });
+});
+
+describe("BOM product names (T-035)", () => {
+  function solvedState(): AppState {
+    const state = reduceState(previewState(), { type: "CONFIRM_ROOM" });
+    const result = solveConfirmed(state, loadCatalog().state);
+    if (!result.ok) throw new Error(result.message);
+    return reduceState(state, { type: "SOLVE_RESULT", output: result.output });
+  }
+
+  it("shows each product's name next to its model id", () => {
+    const state = solvedState();
+    const plan = selectedPlan(state)!;
+    const html = planBOM(plan, state);
+    const skus = loadCatalog().state.skus;
+    for (const item of plan.bom.lineItems) {
+      const name = skus.find((sku) => sku.model_id === item.model_id)!.name;
+      expect(html).toContain(`<strong>${name}</strong>`);
+      expect(html).toContain(item.model_id);
+    }
+  });
+
+  it("exports a name column in the CSV", () => {
+    const plan = selectedPlan(solvedState())!;
+    const [header, first] = bomCsv(plan).split("\n");
+    expect(header).toBe("model_id,name,quantity,finish,price,total");
+    const name = loadCatalog().state.skus.find((sku) => sku.model_id === plan.bom.lineItems[0].model_id)!.name;
+    expect(first).toContain(name.includes(",") ? `"${name}"` : name);
+  });
+});
+
+describe("priority tabs (T-041)", () => {
+  function solvedState(bTarget = "180000", bMax = "250000"): AppState {
+    let state = reduceState(previewState(), { type: "CONFIRM_ROOM" });
+    state = reduceState(reduceState(state, { type: "SET_BUDGET", field: "bTarget", value: bTarget }), { type: "SET_BUDGET", field: "bMax", value: bMax });
+    const result = solveConfirmed(state, loadCatalog().state);
+    if (!result.ok) throw new Error(result.message);
+    return reduceState(state, { type: "SOLVE_RESULT", output: result.output, profiles: result.profiles });
+  }
+
+  it("shows four tabs with a price each, Balanced selected, and differences against it", () => {
+    const state = solvedState("40000", "60000");
+    const html = priorityTabBar(state);
+    for (const key of ["value", "balanced", "eco-low-maintenance", "luxury"]) expect(html).toContain(`data-priority-tab="${key}"`);
+    expect(html).toMatch(/data-priority-tab="balanced"[^>]*aria-pressed="true"/);
+    expect(html).toContain("₹40,400");
+    expect(html).toContain("−₹2,630"); // value 37,770 vs balanced 40,400
+    expect(html).toContain("+₹18,980"); // luxury 59,380 vs balanced 40,400
+  });
+
+  it("tags a repeated plan", () => {
+    expect(priorityTabBar(solvedState("100000", "150000"))).toContain("Same as Balanced");
+  });
+
+  it("the default budget gives four different plans (T-042 premium catalog)", () => {
+    expect(priorityTabBar(solvedState())).not.toContain("Same as");
+  });
+
+  it("renders nothing without tab plans", () => {
+    expect(priorityTabBar(previewState())).toBe("");
   });
 });

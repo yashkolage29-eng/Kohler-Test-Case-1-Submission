@@ -5,7 +5,7 @@ import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { RoomEnvironment } from "three/examples/jsm/environments/RoomEnvironment.js";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
-import type { DecorType, PlacedDecor, RenderGeometry, SKU, StylePreset } from "@kolher/engine";
+import type { DecorStyle, DecorType, PlacedDecor, RenderGeometry, SKU, StylePreset } from "@kolher/engine";
 import { WALL_HEIGHT_MM, buildSceneSpec, type SceneSpec } from "./sceneSpec.js";
 import { addCeilingLamp, addLights, buildPlacedDecor, buildSceneGroup, defaultCameraPosition, lookAtPoint } from "./build3d.js";
 import { applyCutaway, buildArchitecture, buildSupports, type RoomStyle } from "./room3d.js";
@@ -64,24 +64,32 @@ type ModelChoice = Partial<Record<StylePreset | "default", string>>;
 /** Bundled CC0 décor models (public/models, see ASSETS.md) per type, varied by style preset.
  *  Types or styles without an entry keep their procedural mesh. */
 const DECOR_MODELS: Partial<Record<DecorType, ModelChoice>> = {
-  plant: { default: "plant-floor", "japanese-zen": "plant-bonsai", japandi: "plant-calathea", scandinavian: "plant-calathea", "minimalist-modern": "plant-fern", "japanese-brutalism": "plant-fern", "industrial-loft": "plant-anthurium", coastal: "plant-anthurium" },
+  plant: { default: "plant-floor", "japanese-zen": "plant-bonsai", japandi: "plant-calathea", scandinavian: "plant-calathea", "minimalist-modern": "plant-fern", "japanese-brutalism": "plant-fern", "industrial-loft": "plant-anthurium", coastal: "plant-anthurium", "dark-luxury": "plant-fern" },
   "small-plant": { default: "plant-small" },
-  pendant: { "minimalist-modern": "pendant-modern", scandinavian: "pendant-modern", japandi: "pendant-modern", coastal: "pendant-modern", "japanese-zen": "pendant-lantern", "industrial-loft": "pendant-industrial", "japanese-brutalism": "pendant-industrial" },
+  pendant: { "minimalist-modern": "pendant-modern", scandinavian: "pendant-modern", japandi: "pendant-modern", coastal: "pendant-modern", "japanese-zen": "pendant-lantern", "industrial-loft": "pendant-industrial", "japanese-brutalism": "pendant-industrial", "dark-luxury": "pendant-industrial" },
   chandelier: { default: "chandelier" },
   lantern: { default: "lantern-wood", "industrial-loft": "lantern-metal", coastal: "lantern-metal" },
-  sconce: { "industrial-loft": "sconce-industrial" },
+  sconce: { "industrial-loft": "sconce-industrial", "dark-luxury": "sconce-industrial" },
   mirror: { "classic-luxury": "mirror-ornate" },
-  art: { default: "art-photo", "classic-luxury": "art-classic", "japanese-zen": "art-round", "minimalist-modern": "art-modern", scandinavian: "art-modern", japandi: "art-modern" },
-  vase: { default: "vase-white", "classic-luxury": "vase-brass", coastal: "vase-blue", "japanese-brutalism": "vase-jug", japandi: "vase-urn" },
+  art: { default: "art-photo", "classic-luxury": "art-classic", "japanese-zen": "art-round", "minimalist-modern": "art-modern", scandinavian: "art-modern", japandi: "art-modern", "dark-luxury": "art-modern" },
+  vase: { default: "vase-white", "classic-luxury": "vase-brass", coastal: "vase-blue", "japanese-brutalism": "vase-jug", japandi: "vase-urn", "dark-luxury": "vase-brass" },
   stool: { default: "stool-rustic", "japanese-zen": "stool-chinese", "industrial-loft": "stool-metal", coastal: "stool-painted", scandinavian: "stool-painted" },
   bench: { default: "bench" },
   basket: { default: "basket" },
   bowl: { default: "bowl-wood" },
 };
 
-export function decorModelUrl(type: DecorType, preset?: StylePreset): string | undefined {
+/** T-034: light models for custom tastes (no preset), chosen by the décor metal so a
+ *  typed "industrial black" brief does not fall back to the plain procedural lamp. */
+const METAL_LIGHT_MODELS: Partial<Record<DecorType, Partial<Record<DecorStyle["metal"], string>>>> = {
+  pendant: { black: "pendant-industrial", brass: "pendant-lantern", chrome: "pendant-modern", nickel: "pendant-modern" },
+  sconce: { black: "sconce-industrial" },
+};
+
+export function decorModelUrl(type: DecorType, preset?: StylePreset, metal?: DecorStyle["metal"]): string | undefined {
   const choice = DECOR_MODELS[type];
-  const name = (preset && choice?.[preset]) ?? choice?.default;
+  const byMetal = preset === undefined && metal !== undefined ? METAL_LIGHT_MODELS[type]?.[metal] : undefined;
+  const name = (preset && choice?.[preset]) ?? byMetal ?? choice?.default;
   return name ? `/models/${name}.glb` : undefined;
 }
 const modelCache = new Map<string, Promise<THREE.Object3D | null>>();
@@ -98,9 +106,9 @@ function loadModel(url: string): Promise<THREE.Object3D | null> {
 /** Swap procedural décor for the bundled CC0 models, fitted into each item's box. Wall
  *  pieces fit width × height (depth may exceed the thin box); ceiling pieces hang from the
  *  ceiling and may use the empty drop above their box; the procedural lights stay. */
-function upgradeDecor(decorGroup: THREE.Group, decor: PlacedDecor[], preset: StylePreset | undefined, ceilingMm: number, redraw: () => void): void {
+function upgradeDecor(decorGroup: THREE.Group, decor: PlacedDecor[], style: RoomStyle | undefined, ceilingMm: number, redraw: () => void): void {
   for (const item of decor) {
-    const url = decorModelUrl(item.type, preset);
+    const url = decorModelUrl(item.type, style?.preset, style?.metal);
     const group = decorGroup.children.find((child) => child.userData.decorId === item.id);
     if (!url || !group) continue;
     void loadModel(url).then((model) => {
@@ -205,7 +213,7 @@ export function mountRender3d(canvas: HTMLCanvasElement, geometry: RenderGeometr
       draw();
     };
   }
-  if (decorGroup && decor) upgradeDecor(decorGroup, decor, opts?.style?.preset, WALL_HEIGHT_MM, () => redraw());
+  if (decorGroup && decor) upgradeDecor(decorGroup, decor, opts?.style, WALL_HEIGHT_MM, () => redraw());
 
   let frame = 0;
   const reducedMotion = typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;

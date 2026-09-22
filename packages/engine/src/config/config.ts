@@ -31,6 +31,15 @@ export const SPACIOUSNESS_MODIFIER: Record<Spaciousness, number> = {
   airy: 1.25,
 };
 
+/** T-032 cost curve under B_target: balanced/luxury lose score for leaving budget unused,
+ *  value gains score for saving, eco is flat. Planning-level. */
+export const COST_CURVE: Record<Priority, { atZero: number; atTarget: number; pivot?: "max" }> = {
+  value: { atZero: 1, atTarget: 0.7 },
+  balanced: { atZero: 0.5, atTarget: 1 },
+  luxury: { atZero: 0.5, atTarget: 1, pivot: "max" },
+  "eco-low-maintenance": { atZero: 1, atTarget: 1 },
+};
+
 /** Anchored normalization references (OPT §7). Each anchor is a single config entry with
  *  rationale so scores stay stable, comparable, and narratable. Planning-level defaults —
  *  pending product audit. */
@@ -56,19 +65,16 @@ export const ANCHORS = {
  *  these per solve; classCountRanges are the authoritative count bounds. */
 export const ARCHETYPES: ArchetypeTemplate[] = [
   {
-    id: "compact-guest",
-    label: "Compact guest",
-    classCountRanges: { toilet: { min: 1, max: 1 }, basin: { min: 1, max: 1 }, faucet: { min: 1, max: 1 } },
-  },
-  {
     id: "budget-family",
     label: "Budget family",
     classCountRanges: {
       toilet: { min: 1, max: 1 },
-      basin: { min: 1, max: 1 },
+      basin: { min: 0, max: 1 },
+      vanity: { min: 0, max: 1 },
       faucet: { min: 1, max: 1 },
-      shower: { min: 1, max: 1 },
+      shower: { min: 0, max: 1 },
       tub: { min: 0, max: 1 },
+      accessory: { min: 0, max: 2 },
     },
   },
   {
@@ -76,10 +82,12 @@ export const ARCHETYPES: ArchetypeTemplate[] = [
     label: "Spa master",
     classCountRanges: {
       toilet: { min: 1, max: 1 },
-      basin: { min: 1, max: 2 },
+      basin: { min: 0, max: 2 },
       faucet: { min: 1, max: 2 },
-      shower: { min: 1, max: 2 },
+      shower: { min: 0, max: 2 },
+      tub: { min: 0, max: 1 },
       vanity: { min: 0, max: 1 },
+      accessory: { min: 0, max: 2 },
     },
   },
   {
@@ -87,13 +95,20 @@ export const ARCHETYPES: ArchetypeTemplate[] = [
     label: "Full / Luxury",
     classCountRanges: {
       toilet: { min: 1, max: 1 },
-      basin: { min: 1, max: 2 },
+      basin: { min: 0, max: 2 },
       faucet: { min: 1, max: 2 },
-      shower: { min: 1, max: 2 },
+      shower: { min: 0, max: 2 },
       tub: { min: 1, max: 1 },
-      vanity: { min: 1, max: 1 },
+      vanity: { min: 0, max: 1 },
       accessory: { min: 0, max: 2 },
     },
+  },
+  {
+    // T-032: no shower or tub — only reachable through the labeled drop-shower relaxation.
+    id: "compact-guest",
+    label: "Compact guest",
+    fallback: true,
+    classCountRanges: { toilet: { min: 1, max: 1 }, basin: { min: 0, max: 1 }, vanity: { min: 0, max: 1 }, faucet: { min: 1, max: 1 } },
   },
 ];
 
@@ -102,9 +117,10 @@ export const DEFAULT_CONFIG: Config = {
   weights: WEIGHTS,
   spaciousnessModifier: SPACIOUSNESS_MODIFIER,
   spaciousnessModBound: 1.25,
+  costCurve: COST_CURVE,
   anchors: ANCHORS,
   slotGridMm: 25, // OPT §4/§9 default grid
-  backtrackBudget: 10000, // bounded search; exhaustion routes to relaxation (OPT §9/§17)
+  backtrackBudget: 20000, // bounded search; exhaustion routes to relaxation (OPT §9/§17). T-042: doubled for the premium catalog additions (~35 ms worst seen)
   topK: 3, // OPT §12: k ≥ 3
   minBudgetInr: 50000, // MIN_BUDGET gate — planning-level default, pending product audit
   archetypes: ARCHETYPES,

@@ -315,5 +315,34 @@ export function buildSceneSpec(geometry: RenderGeometry, skus: SKU[]): SceneSpec
   }
 
   for (const fixture of geometry.fixtures) parts.push(...fixtureParts(fixture, skuByModel, geometry.polygon, strips));
+  seatFaucetsOnVanities(parts);
   return { parts, openings };
+}
+
+const partHeight = (p: PartSpec): number => (p.shape.shape === "box" ? p.shape.sizeMm.h : p.shape.hMm);
+/** Whether a world (x, z) point lies over a box part's footprint, in the part's wall frame. */
+function overPart(p: PartSpec, x: number, z: number): boolean {
+  if (p.shape.shape !== "box") return false;
+  const dx = x - p.positionMm.x;
+  const dz = z - p.positionMm.z;
+  const along = dx * Math.cos(p.rotationY) - dz * Math.sin(p.rotationY);
+  const into = dx * Math.sin(p.rotationY) + dz * Math.cos(p.rotationY);
+  return Math.abs(along) <= p.shape.sizeMm.w / 2 && Math.abs(into) <= p.shape.sizeMm.d / 2;
+}
+
+/** T-032/T-034: a deck faucet on a vanity sits on the vanity top (870–880 mm), not at the
+ *  standalone counter height mountElevationMm assumes, which would sink it into the top. */
+function seatFaucetsOnVanities(parts: PartSpec[]): void {
+  const tops = parts.filter((p) => p.fixtureClass === "vanity" && p.part === "top");
+  const faucetIds = [...new Set(parts.filter((p) => p.fixtureClass === "faucet").map((p) => p.modelId))];
+  for (const id of faucetIds) {
+    const faucet = parts.filter((p) => p.fixtureClass === "faucet" && p.modelId === id);
+    const bottom = Math.min(...faucet.map((p) => p.positionMm.y - partHeight(p) / 2));
+    const cx = faucet.reduce((t, p) => t + p.positionMm.x, 0) / faucet.length;
+    const cz = faucet.reduce((t, p) => t + p.positionMm.z, 0) / faucet.length;
+    const host = tops.find((t) => overPart(t, cx, cz));
+    if (!host) continue;
+    const dy = host.positionMm.y + partHeight(host) / 2 - bottom;
+    for (const p of faucet) p.positionMm = { ...p.positionMm, y: p.positionMm.y + dy };
+  }
 }

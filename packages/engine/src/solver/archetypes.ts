@@ -28,6 +28,15 @@ export function effectiveCountRange(
   return min > max ? null : { min, max };
 }
 
+/** T-032/T-036: every bathroom needs at least one sink (basin or vanity) and at least one
+ *  wet fixture (shower or tub), even when each class is individually optional. */
+export const ONE_OF_GROUPS: readonly (readonly FixtureClass[])[] = [["basin", "vanity"], ["shower", "tub"]];
+
+/** How many fixtures of `group` the minimum counts leave uncovered (0 or 1). */
+export function missingOneOf(ranges: Partial<Record<FixtureClass, ClassCountRange | undefined>>, group: readonly FixtureClass[]): number {
+  return Math.max(0, 1 - group.reduce((t, cls) => t + (ranges[cls]?.min ?? 0), 0));
+}
+
 /** Cheapest surviving SKU of a class (price asc, then model_id), or null. */
 export function cheapestSku(catalog: CatalogState, cls: FixtureClass): SKU | null {
   let best: SKU | null = null;
@@ -49,6 +58,7 @@ export function filterArchetypes(input: InputSet, catalog: CatalogState, roomUsa
   const bMax = input.budget.bMax;
   const out: ArchetypeTemplate[] = [];
   for (const arch of input.config.archetypes) {
+    if (arch.fallback === true) continue; // T-032: only the drop-shower relaxation enables it
     let feasible = true;
     let minCost = 0;
     let minWidthMm = 0;
@@ -66,6 +76,26 @@ export function filterArchetypes(input: InputSet, catalog: CatalogState, roomUsa
       }
       minCost += cheapest.price * range.min;
       minWidthMm += cheapest.dim.w * range.min;
+    }
+    if (!feasible) continue;
+    // T-032/T-036: the mandatory sink and wet fixture count toward minimum cost and width.
+    for (const group of ONE_OF_GROUPS) {
+      const ranges: Partial<Record<FixtureClass, ClassCountRange>> = {};
+      for (const cls of group) ranges[cls] = effectiveCountRange(arch, input, cls) ?? undefined;
+      if (missingOneOf(ranges, group) === 0) continue;
+      const options = group
+        .filter((cls) => (ranges[cls]?.max ?? 0) > 0)
+        .map((cls) => cheapestSku(catalog, cls))
+        .filter((sku): sku is SKU => sku !== null);
+      if (options.length === 0) {
+        // Not applicable when the template (or an explicit taste exclusion) allows no class
+        // of the group — e.g. the drop-shower fallback; a sink is always allowed.
+        if (group.every((cls) => (ranges[cls]?.max ?? 0) === 0)) continue;
+        feasible = false; // allowed but not stocked
+        break;
+      }
+      minCost += Math.min(...options.map((sku) => sku.price));
+      minWidthMm += Math.min(...options.map((sku) => sku.dim.w));
     }
     if (!feasible) continue;
     // Budget filter: cheapest possible binding must not exceed the hard ceiling.

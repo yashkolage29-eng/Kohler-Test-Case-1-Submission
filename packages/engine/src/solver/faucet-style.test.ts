@@ -45,7 +45,8 @@ describe("deck faucet placement", () => {
     const rep = buildBathroomRep(i);
     if (!rep.ok) throw new Error("rep");
     const bindings = p.selectedCandidate.bindings;
-    const basins = bindings.filter((b) => b.fixture.class === "basin");
+    // T-032: a vanity's integrated basin hosts the faucet too.
+    const basins = bindings.filter((b) => b.fixture.class === "basin" || b.fixture.class === "vanity");
     const faucets = bindings.filter((b) => b.fixture.class === "faucet");
     expect(faucets.length).toBeGreaterThan(0);
     for (const faucet of faucets) {

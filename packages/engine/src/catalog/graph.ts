@@ -15,6 +15,9 @@ export function defaultOk(
 ): boolean {
   if (a.fixture_class === "basin" && b.fixture_class === "faucet") return faucetFitsBasin(a, b);
   if (a.fixture_class === "faucet" && b.fixture_class === "basin") return faucetFitsBasin(b, a);
+  // T-032: a vanity's integrated basin takes a standard (not tall) deck faucet.
+  if (a.fixture_class === "vanity" && b.fixture_class === "faucet") return faucetFitsBasin(a, b);
+  if (a.fixture_class === "faucet" && b.fixture_class === "vanity") return faucetFitsBasin(b, a);
   if (WHITE_WARE.has(a.fixture_class) || WHITE_WARE.has(b.fixture_class)) return true;
   const fa = new Set(a.finish_options.map((f) => familiesOf.get(f)));
   for (const f of b.finish_options) {

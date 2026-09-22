@@ -12,15 +12,22 @@ export const NIM_GENERAL_MAX_PER_WINDOW = 25;
 export type NimPool = "decor" | "general";
 
 const poolLimits: Record<NimPool, number> = { decor: NIM_DECOR_MAX_PER_WINDOW, general: NIM_GENERAL_MAX_PER_WINDOW };
+/** T-044: OpenRouter ':free' models allow 20 requests per minute, so 6 + 12 = 18. */
+const OPENROUTER_POOL_LIMITS: Record<NimPool, number> = { decor: 6, general: 12 };
 const requestStarts: Record<NimPool, number[]> = { decor: [], general: [] };
 
-function reserveRequest(pool: NimPool): boolean {
+/** The client speaks the OpenAI-compatible chat API to either NVIDIA NIM or OpenRouter. */
+function isOpenRouter(baseUrl: string): boolean {
+  return new URL(baseUrl).hostname === "openrouter.ai";
+}
+
+function reserveRequest(pool: NimPool, limits: Record<NimPool, number>): boolean {
   const starts = requestStarts[pool];
   const now = Date.now();
   while (starts.length && now - starts[0]! >= NIM_WINDOW_MS) {
     starts.shift();
   }
-  if (starts.length >= poolLimits[pool]) return false;
+  if (starts.length >= limits[pool]) return false;
   starts.push(now);
   return true;
 }
@@ -44,7 +51,12 @@ export type NimResult = { ok: true; content: string } | { ok: false; reason: Nim
 
 export type NimUserContent = string | Array<{ type: "text"; text: string } | { type: "image_url"; image_url: { url: string } }>;
 
-/** `opts.nimModel` is per call: callers pass the vision model for image content. */
+/** T-044: at most this many models are tried per request. */
+const MAX_CHAIN_ATTEMPTS = 3;
+
+/** `opts.nimModel` is per call: callers pass the vision model for image content. It may be a
+ *  comma-separated fallback chain: only an upstream 429 (a fast "busy" answer) moves on to the
+ *  next model; every attempt is reserved from the same per-minute pool. */
 export async function nimRequest(
   opts: NimClientOptions,
   userPrompt: NimUserContent,
@@ -52,6 +64,22 @@ export async function nimRequest(
   maxTokens: number,
   pool: NimPool = "general"
 ): Promise<NimResult> {
+  const models = opts.nimModel.split(",").map((m) => m.trim()).filter(Boolean).slice(0, MAX_CHAIN_ATTEMPTS);
+  let result: NimResult & { upstreamBusy?: boolean } = { ok: false, reason: "provider-config" };
+  for (const model of models) {
+    result = await nimAttempt({ ...opts, nimModel: model }, userPrompt, systemPrompt, maxTokens, pool);
+    if (!("upstreamBusy" in result && result.upstreamBusy)) break;
+  }
+  return result.ok ? result : { ok: false, reason: result.reason };
+}
+
+async function nimAttempt(
+  opts: NimClientOptions,
+  userPrompt: NimUserContent,
+  systemPrompt: string,
+  maxTokens: number,
+  pool: NimPool
+): Promise<NimResult & { upstreamBusy?: boolean }> {
   if (!opts.nimModel.trim() || !Number.isFinite(opts.nimTimeoutMs) || opts.nimTimeoutMs <= 0 || opts.nimTimeoutMs > 120_000) return { ok: false, reason: "provider-config" };
   try {
     const url = new URL(opts.nimBaseUrl);
@@ -59,7 +87,8 @@ export async function nimRequest(
   } catch {
     return { ok: false, reason: "provider-config" };
   }
-  if (!reserveRequest(pool)) return { ok: false, reason: "provider-rate-limit" };
+  const openRouter = isOpenRouter(opts.nimBaseUrl);
+  if (!reserveRequest(pool, openRouter ? OPENROUTER_POOL_LIMITS : poolLimits)) return { ok: false, reason: "provider-rate-limit" };
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), opts.nimTimeoutMs);
   try {
@@ -78,14 +107,15 @@ export async function nimRequest(
         ],
         max_tokens: maxTokens,
         temperature: 0,
-        // Nemotron models reason by default (slow, and reasoning can exhaust max_tokens
+        // Reasoning models think by default (slow, and reasoning can exhaust max_tokens
         // before any JSON is emitted); the app needs the direct answer only.
-        chat_template_kwargs: { enable_thinking: false },
+        ...(openRouter ? { reasoning: { effort: "none" } } : { chat_template_kwargs: { enable_thinking: false } }),
       }),
     });
     if (!res.ok) {
       await res.body?.cancel();
-      return { ok: false, reason: res.status === 401 || res.status === 403 ? "provider-auth" : res.status === 404 ? "provider-model" : res.status === 429 ? "provider-rate-limit" : "provider-upstream" };
+      if (res.status === 429) return { ok: false, reason: "provider-rate-limit", upstreamBusy: true };
+      return { ok: false, reason: res.status === 401 || res.status === 403 ? "provider-auth" : res.status === 404 ? "provider-model" : "provider-upstream" };
     }
     let json: unknown;
     try {

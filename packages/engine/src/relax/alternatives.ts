@@ -11,7 +11,7 @@ import type { CatalogState } from "../catalog/schema.js";
 import type { Scores } from "../contracts/candidate.js";
 import type { AlternativeProfilePlan } from "../contracts/plan.js";
 import { PRIORITIES } from "../contracts/vocab.js";
-import { validatedCandidates } from "../objective/solve.js";
+import { cachedValidatedCandidates } from "../cache/cache.js";
 import { DEFAULT_PRIORITY, resolveWeights, scoreCandidate } from "../objective/scores.js";
 import { rankCandidates, scoreWithWeights, topK } from "../objective/rank.js";
 import { buildPlan } from "../objective/build-plan.js";
@@ -23,7 +23,8 @@ export function alternativeProfiles(
   input: InputSet,
   catalog: CatalogState,
 ): AlternativeProfilePlan[] {
-  const collected = validatedCandidates(input, catalog);
+  // T-041: the primary solve already cached this set; profiles only re-score it.
+  const collected = cachedValidatedCandidates(input, catalog);
   if (collected.kind !== "ok") return [];
   const primary = input.priority ?? DEFAULT_PRIORITY;
   const { resolvedPairs, rep } = collected;
@@ -32,8 +33,10 @@ export function alternativeProfiles(
   for (const profile of PRIORITIES) {
     if (profile === primary) continue;
     const { weights } = resolveWeights(input.config, profile, input.spaciousness);
+    // T-032: u_cost depends on the priority (budget pull), so score as that profile.
+    const asProfile: InputSet = { ...input, priority: profile };
     const scored = resolvedPairs.map(({ candidate, resolved }) =>
-      scoreWithWeights(candidate, scoreCandidate(candidate, resolved, input, catalog), weights),
+      scoreWithWeights(candidate, scoreCandidate(candidate, resolved, asProfile, catalog), weights),
     );
     const ranked = rankCandidates(scored);
     if (ranked.length === 0) continue;

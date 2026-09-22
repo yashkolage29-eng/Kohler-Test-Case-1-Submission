@@ -1,3 +1,4 @@
+import type { AppState } from "./store.js";
 import { describe, expect, it } from "vitest";
 import { buildRenderGeometry, buildWallStrips, loadCatalog } from "@kolher/engine";
 import {
@@ -6,6 +7,8 @@ import {
   EMPTY_FEATURE_CONSTRAINTS,
   initialState,
   offlineTasteToFeatures,
+  priorityTabs,
+  openingError,
   selectedPlan,
   reduceState,
   reoptimizeConfirmed,
@@ -41,6 +44,30 @@ describe("room preview editor", () => {
     state = reduceState(state, { type: "UNDO_ROOM_EDIT" });
     expect(state.preview).toEqual(added.preview);
     expect(state.roomSelection).toEqual(added.roomSelection);
+  });
+
+  it("adds many windows in a big room, several per wall, never overlapping (T-037)", () => {
+    const room = { ...initialState().room, widthMm: "5000", depthMm: "4000" };
+    const result = buildRoomPreview(room);
+    if (!result.ok) throw new Error(result.message);
+    let state = reduceState(reduceState({ ...initialState(), room }, { type: "PREVIEW_ROOM_SUCCESS", preview: result.preview }), { type: "EDIT_ROOM" });
+    for (let i = 0; i < 8; i++) state = reduceState(state, { type: "ADD_WINDOW" });
+    const windows = state.preview!.openings.filter((o) => o.kind === "window");
+    expect(windows).toHaveLength(8);
+    expect(state.roomError).toBeUndefined();
+    const perWall = new Map<string, number>();
+    for (const w of windows) perWall.set(w.wallId, (perWall.get(w.wallId) ?? 0) + 1);
+    expect(Math.max(...perWall.values())).toBeGreaterThanOrEqual(2);
+    // No overlaps and every window inside its wall (openingError is the room validator).
+    expect(openingError(state.preview!)).toBeUndefined();
+  });
+
+  it("refuses a window only when no wall has a free 600 mm gap (T-037)", () => {
+    let state = editingRoom(); // 2400 × 1800
+    for (let i = 0; i < 20; i++) state = reduceState(state, { type: "ADD_WINDOW" });
+    expect(state.roomError).toContain("600 mm");
+    expect(openingError(state.preview!)).toBeUndefined();
+    expect(state.preview!.openings.filter((o) => o.kind === "window").length).toBeGreaterThan(3);
   });
 
   it("preserves edited openings across preview refresh and temporarily invalid dimensions", () => {
@@ -310,7 +337,7 @@ describe("T-016 room gate", () => {
     const stale = reduceState(state, { type: "SET_TASTE_TEXT", value: "a different brief" });
     expect(stale.output).toBeUndefined();
     state = reduceState(state, { type: "SOLVE_RESULT", output: solved.output });
-    state = reduceState(state, { type: "SET_FIXTURE_CLASS", value: "tub" });
+    state = reduceState(state, { type: "SET_FIXTURE_WANT", fixture: "tub", value: true });
     state = reduceState(state, { type: "SET_DOOR_OFFSET", value: "25" });
     const adjusted = buildConfirmedInput(state);
     expect(adjusted.ok).toBe(true);
@@ -385,7 +412,7 @@ describe("T-016 room gate", () => {
       firstPlan.bom.lineItems.map(({ model_id }) => model_id).sort(),
     );
 
-    state = reduceState(state, { type: "SET_PRIORITY", value: "luxury" });
+    state = reduceState(state, { type: "SET_SPACIOUSNESS", value: "compact" });
     expect(state.adjustmentsDirty).toBe(true);
     const adjusted = reoptimizeConfirmed(state, catalog, {
       kind: "weights",
@@ -436,5 +463,118 @@ describe("SET_STYLE_PRESET", () => {
     const off = reduceState(other, { type: "SET_STYLE_PRESET", preset: "coastal", finishFamily: "brushed_nickel" });
     expect(off.taste.stylePreset).toBeUndefined();
     expect(off.taste.featureConstraints.finishFamilies).toEqual(["matte_black"]);
+  });
+});
+
+describe("T-036 wanted-fixtures list", () => {
+  function confirmed(): AppState {
+    const preview = buildRoomPreview(initialState().room);
+    if (!preview.ok) throw new Error(preview.message);
+    return reduceState(reduceState(initialState(), { type: "PREVIEW_ROOM_SUCCESS", preview: preview.preview }), { type: "CONFIRM_ROOM" });
+  }
+
+  it("defaults to toilet + shower + auto sink, excluding tub and accessories", () => {
+    const input = buildConfirmedInput(confirmed());
+    if (!input.ok) throw new Error(input.message);
+    const r = input.input.featureConstraints.classCountRanges;
+    expect(r.toilet).toEqual({ min: 1, max: 1 });
+    expect(r.shower).toEqual({ min: 1, max: 1 });
+    expect(r.tub).toEqual({ min: 0, max: 0 });
+    expect(r.accessory).toEqual({ min: 0, max: 0 });
+    expect(r.basin).toBeUndefined();
+    expect(r.vanity).toBeUndefined();
+  });
+
+  it("maps the sink choice to exactly one sink class", () => {
+    let state = reduceState(confirmed(), { type: "SET_SINK", value: "basin" });
+    let input = buildConfirmedInput(state);
+    if (!input.ok) throw new Error(input.message);
+    expect(input.input.featureConstraints.classCountRanges.basin).toEqual({ min: 1, max: 1 });
+    expect(input.input.featureConstraints.classCountRanges.vanity).toEqual({ min: 0, max: 0 });
+    state = reduceState(state, { type: "SET_SINK", value: "vanity" });
+    input = buildConfirmedInput(state);
+    if (!input.ok) throw new Error(input.message);
+    expect(input.input.featureConstraints.classCountRanges.vanity).toEqual({ min: 1, max: 1 });
+  });
+
+  it("refuses a brief with neither shower nor tub", () => {
+    const state = reduceState(confirmed(), { type: "SET_FIXTURE_WANT", fixture: "shower", value: false });
+    const input = buildConfirmedInput(state);
+    expect(input.ok).toBe(false);
+    if (!input.ok) expect(input.message).toContain("shower, a tub");
+  });
+
+  it("a tub-only list solves to a plan without a shower", () => {
+    let state = reduceState(confirmed(), { type: "SET_FIXTURE_WANT", fixture: "tub", value: true });
+    state = reduceState(state, { type: "SET_FIXTURE_WANT", fixture: "shower", value: false });
+    const result = solveConfirmed(state, loadCatalog().state);
+    if (!result.ok) throw new Error(result.message);
+    const plan = result.output.kind === "plan" ? result.output.plan : result.output.kind === "relaxation" ? result.output.menu[0].plan : null;
+    expect(plan).not.toBeNull();
+    const classes = plan!.selectedCandidate.bindings.map((b) => b.fixture.class);
+    expect(classes).not.toContain("shower");
+  });
+
+  it("editing the list on the Result page marks the plan dirty as a global change", () => {
+    let state = confirmed();
+    const solved = solveConfirmed(state, loadCatalog().state);
+    if (!solved.ok) throw new Error(solved.message);
+    state = reduceState(state, { type: "SOLVE_RESULT", output: solved.output });
+    state = reduceState(state, { type: "SET_FIXTURE_WANT", fixture: "accessory", value: true });
+    expect(state.output).toBeDefined();
+    expect(state.adjustmentsDirty).toBe(true);
+    expect(state.adjustmentKind).toBe("global");
+  });
+});
+
+describe("T-041 priority tabs", () => {
+  const catalog = loadCatalog().state;
+  function confirmed(): AppState {
+    const preview = buildRoomPreview(initialState().room);
+    if (!preview.ok) throw new Error(preview.message);
+    return reduceState(reduceState(initialState(), { type: "PREVIEW_ROOM_SUCCESS", preview: preview.preview }), { type: "CONFIRM_ROOM" });
+  }
+  function solved(state: AppState): AppState {
+    state = reduceState(state, { type: "SOLVE_START" });
+    const result = solveConfirmed(state, catalog);
+    if (!result.ok) throw new Error(result.message);
+    return reduceState(state, { type: "SOLVE_RESULT", output: result.output, profiles: result.profiles });
+  }
+
+  it("a solve yields a validated plan for every priority, all within the maximum budget", () => {
+    const state = solved(confirmed());
+    const tabs = priorityTabs(state);
+    expect(tabs.map((t) => t.priority)).toEqual(["value", "balanced", "eco-low-maintenance", "luxury"]);
+    for (const tab of tabs) expect(tab.plan.cost).toBeLessThanOrEqual(250000);
+    expect(tabs.find((t) => t.priority === "luxury")!.plan.cost).toBeGreaterThan(tabs.find((t) => t.priority === "value")!.plan.cost);
+  });
+
+  it("opens on Balanced and switching tabs changes the plan without a re-solve", () => {
+    let state = solved(reduceState(confirmed(), { type: "SELECT_PRIORITY", value: "luxury" }));
+    expect(state.taste.priority).toBe("balanced");
+    const balanced = selectedPlan(state);
+    state = reduceState(state, { type: "SELECT_PRIORITY", value: "value" });
+    expect(state.adjustmentsDirty).toBe(false);
+    expect(state.solveStatus).toBe("success");
+    expect(selectedPlan(state)?.id).not.toBe(balanced?.id);
+    expect(selectedPlan(state)?.id).toBe(priorityTabs(state).find((t) => t.priority === "value")!.plan.id);
+  });
+
+  it("tags a tab whose plan repeats an earlier tab", () => {
+    const low = reduceState(reduceState(confirmed(), { type: "SET_BUDGET", field: "bTarget", value: "40000" }), { type: "SET_BUDGET", field: "bMax", value: "60000" });
+    const tabs = priorityTabs(solved(low));
+    for (const tab of tabs) {
+      const first = tabs.find((t) => t.plan.selectedCandidate.id === tab.plan.selectedCandidate.id)!;
+      expect(tab.sameAs).toBe(first === tab ? undefined : first.priority);
+    }
+  });
+
+  it("recovery options each carry their own tabs", () => {
+    let state = reduceState(confirmed(), { type: "SET_SINK", value: "vanity" });
+    state = reduceState(reduceState(state, { type: "SET_BUDGET", field: "bTarget", value: "40000" }), { type: "SET_BUDGET", field: "bMax", value: "60000" });
+    state = solved(state);
+    expect(state.output?.kind).toBe("relaxation");
+    expect(priorityTabs(state)).toHaveLength(4);
+    expect(priorityTabs(state).every((t) => t.plan.cost <= (state.output?.kind === "relaxation" ? state.output.menu[0].plan.budgetSummary.bMax : 0))).toBe(true);
   });
 });

@@ -11,6 +11,9 @@ export interface ArchetypeTemplate {
   id: string;
   label: string;
   classCountRanges: Partial<Record<FixtureClass, ClassCountRange>>;
+  /** T-032: a reduced template (no shower) that the solver skips by default; only the
+   *  labeled drop-shower relaxation path enables it for rooms too small for a shower. */
+  fallback?: boolean;
 }
 
 export interface Anchors {
@@ -30,6 +33,12 @@ export interface Config {
   /** Bounded modifier on the space-term weight only (ADR-006). */
   spaciousnessModifier: Record<Spaciousness, number>;
   spaciousnessModBound: number;
+  /** T-032: u_cost at zero spend and at B_target per priority; linear in between, then
+   *  linear from `atTarget` down to 0 at B_max. atZero < atTarget pulls spend toward the
+   *  target; atZero > atTarget rewards savings; equal values are flat. `pivot: "max"`
+   *  (T-041) moves the peak from B_target to B_max, so that priority leans to the top of
+   *  the range. */
+  costCurve: Record<Priority, { atZero: number; atTarget: number; pivot?: "max" }>;
   anchors: Anchors;
   slotGridMm: number;
   /** Bounded backtracking budget; exhaustion routes to relaxation, never a hang. */
